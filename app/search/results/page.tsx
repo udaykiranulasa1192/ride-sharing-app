@@ -57,7 +57,63 @@ function ResultsContent() {
       if (user) {
         setAuthUser(user);
         const { data: profile } = await supabase.from('passenger_profiles').select('*').eq('id', user.id).single();
-        if (profile) setPassengerProfile(profile);
+        
+        if (profile) {
+          setPassengerProfile(profile);
+
+          // --- THE FIX: MEMORY RECOVERY ---
+          // Ask the database: "Has this phone number already requested any rides?"
+          const { data: previousRequests } = await supabase
+            .from('ride_requests')
+            .select('ride_id')
+            .eq('passenger_phone', profile.mobile_number);
+
+          if (previousRequests) {
+            // Put all the ride_ids they previously requested into our React State
+            const requestedRideIds = previousRequests.map(req => req.ride_id);
+            setSentRequests(requestedRideIds);
+          }
+        }
+      }
+    }
+    
+    async function fetchRides() {
+      let query = supabase.from('rides').select('*');
+      if (searchCity) query = query.ilike('outward_code', searchCity);
+      if (dest) query = query.eq('destination_hub', dest);
+      if (shift) query = query.eq('shift_type', shift);
+
+      const { data, error } = await query.order('created_at', { ascending: false });
+      if (!error) setRides(data || []);
+      setLoading(false);
+    }
+
+    checkAuth();
+    if (searchCity && dest) fetchRides();
+    else setLoading(false);
+  }, [searchCity, dest, shift]);useEffect(() => {
+    async function checkAuth() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setAuthUser(user);
+        const { data: profile } = await supabase.from('passenger_profiles').select('*').eq('id', user.id).single();
+        
+        if (profile) {
+          setPassengerProfile(profile);
+
+          // --- THE FIX: MEMORY RECOVERY ---
+          // Ask the database: "Has this phone number already requested any rides?"
+          const { data: previousRequests } = await supabase
+            .from('ride_requests')
+            .select('ride_id')
+            .eq('passenger_phone', profile.mobile_number);
+
+          if (previousRequests) {
+            // Put all the ride_ids they previously requested into our React State
+            const requestedRideIds = previousRequests.map(req => req.ride_id);
+            setSentRequests(requestedRideIds);
+          }
+        }
       }
     }
     
