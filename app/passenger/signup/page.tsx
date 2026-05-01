@@ -72,11 +72,11 @@ export default function PassengerAuth() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       
-      {/* Header */}
+     {/* Header */}
       <header className="bg-white px-4 py-4 border-b border-gray-200 shadow-sm flex items-center gap-3">
-        <button onClick={() => router.back()} className="p-2 rounded-full hover:bg-gray-100 transition-colors">
+        <Link href="/search" className="p-2 rounded-full hover:bg-gray-100 transition-colors">
           <ArrowLeft className="h-6 w-6 text-gray-700" />
-        </button>
+        </Link>
         <h1 className="text-xl font-black text-gray-900 uppercase tracking-tight">
           {authMode === 'login' ? 'Welcome Back' : 'Create Account'}
         </h1>
