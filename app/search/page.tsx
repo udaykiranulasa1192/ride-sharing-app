@@ -3,7 +3,18 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { MapPin, Navigation, Sunrise, Sun, Moon, Clock, Search, Car } from "lucide-react";
+import { 
+  MapPin, 
+  Navigation, 
+  Sunrise, 
+  Sun, 
+  Moon, 
+  Clock, 
+  Search, 
+  Car, 
+  User 
+} from "lucide-react";
+import PassengerBottomNav from "@/components/PassengerBottomNav";
 import { supabase } from "@/lib/supabase";
 
 const shifts = [
@@ -22,15 +33,13 @@ export default function SearchPage() {
   // --- DUAL AUTOCOMPLETE STATE ---
   const [locations, setLocations] = React.useState<{name: string}[]>([]);
   
-  // State for the "From" field
   const [filteredFrom, setFilteredFrom] = React.useState<{name: string}[]>([]);
   const [showFromSuggestions, setShowFromSuggestions] = React.useState(false);
 
-  // State for the "To" field
   const [filteredTo, setFilteredTo] = React.useState<{name: string}[]>([]);
   const [showToSuggestions, setShowToSuggestions] = React.useState(false);
 
-  // 1. Fetch the dictionary once when the page loads
+  // 1. Fetch locations on mount
   React.useEffect(() => {
     async function loadLocations() {
       const { data, error } = await supabase.from('workplace_locations').select('name');
@@ -41,39 +50,31 @@ export default function SearchPage() {
     loadLocations();
   }, []);
 
-  // 2. Handle typing in the "From" box
+  // 2. Autocomplete Handlers
   const handleFromChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const userInput = e.target.value;
-    setFrom(userInput);
-
-    if (userInput.length > 0) {
-      const filtered = locations.filter((loc) =>
-        loc.name.toLowerCase().includes(userInput.toLowerCase())
-      );
-      setFilteredFrom(filtered);
+    const val = e.target.value;
+    setFrom(val);
+    if (val.length > 0) {
+      setFilteredFrom(locations.filter(l => l.name.toLowerCase().includes(val.toLowerCase())));
       setShowFromSuggestions(true);
     } else {
       setShowFromSuggestions(false);
     }
   };
 
-  // 3. Handle typing in the "To" box
   const handleToChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const userInput = e.target.value;
-    setTo(userInput);
-
-    if (userInput.length > 0) {
-      const filtered = locations.filter((loc) =>
-        loc.name.toLowerCase().includes(userInput.toLowerCase())
-      );
-      setFilteredTo(filtered);
+    const val = e.target.value;
+    setTo(val);
+    if (val.length > 0) {
+      setFilteredTo(locations.filter(l => l.name.toLowerCase().includes(val.toLowerCase())));
       setShowToSuggestions(true);
     } else {
       setShowToSuggestions(false);
     }
   };
 
-  const handleSearch = () => {
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault(); // Prevent page refresh
     if (!from || !to) {
       alert("Please enter both a starting point and a destination.");
       return;
@@ -82,13 +83,24 @@ export default function SearchPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20 flex flex-col">
-      <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/95 backdrop-blur px-4 py-3 shadow-sm">
-        <Link href="/" className="mx-auto flex max-w-md items-center gap-2 hover:opacity-80 transition-opacity">
+    // pb-24 ensures the bottom nav doesn't cover the 'Find Available Seats' button
+    <div className="min-h-screen bg-gray-50 pb-24 flex flex-col">
+      
+      {/* Header Area */}
+      <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/95 backdrop-blur px-4 py-3 shadow-sm flex items-center justify-between">
+        <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600">
             <Car className="h-4 w-4 text-white" />
           </div>
-          <span className="text-lg font-bold text-gray-900">ShiftPool</span>
+          <span className="text-lg font-bold text-emerald-600">ShiftPool</span>
+        </div>
+        
+        <Link 
+          href="/passenger/dashboard" 
+          className="flex items-center gap-2 text-sm font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 px-3 py-2 rounded-full transition-colors"
+        >
+          <User className="h-4 w-4" />
+          My Rides
         </Link>
       </header>
 
@@ -98,15 +110,16 @@ export default function SearchPage() {
           <p className="mt-1 text-sm text-gray-600">Match with drivers heading your way.</p>
         </div>
 
-        <form className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm space-y-6">
+        <form onSubmit={handleSearch} className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm space-y-6">
           <div className="space-y-4">
             
-            {/* "FROM" FIELD - NOW WITH AUTOCOMPLETE */}
+            {/* Leaving From */}
             <div className="space-y-1.5 relative">
               <label className="text-xs font-bold uppercase tracking-wide text-gray-500">Leaving From</label>
               <div className="relative">
                 <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-600" />
                 <input
+                  required
                   type="text"
                   placeholder="Postcode or Workplace..."
                   value={from}
@@ -116,18 +129,13 @@ export default function SearchPage() {
                   className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3 pl-10 pr-4 text-gray-900 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 placeholder:text-gray-400"
                 />
               </div>
-              
-              {/* From Suggestions Dropdown */}
               {showFromSuggestions && filteredFrom.length > 0 && (
                 <ul className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
-                  {filteredFrom.map((loc, index) => (
+                  {filteredFrom.map((loc, i) => (
                     <li 
-                      key={`from-${index}`}
-                      onClick={() => {
-                        setFrom(loc.name);
-                        setShowFromSuggestions(false);
-                      }}
-                      className="px-4 py-3 hover:bg-emerald-50 cursor-pointer text-gray-900 text-sm border-b border-gray-50 last:border-0 transition-colors"
+                      key={`from-${i}`}
+                      onClick={() => { setFrom(loc.name); setShowFromSuggestions(false); }}
+                      className="px-4 py-3 hover:bg-emerald-50 cursor-pointer text-gray-900 text-sm border-b border-gray-50 last:border-0"
                     >
                       {loc.name}
                     </li>
@@ -136,12 +144,13 @@ export default function SearchPage() {
               )}
             </div>
 
-            {/* "TO" FIELD - WITH AUTOCOMPLETE */}
+            {/* Going To */}
             <div className="space-y-1.5 relative">
               <label className="text-xs font-bold uppercase tracking-wide text-gray-500">Going To</label>
               <div className="relative">
                 <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-600" />
                 <input
+                  required
                   type="text"
                   placeholder="Postcode or Workplace..."
                   value={to}
@@ -151,18 +160,13 @@ export default function SearchPage() {
                   className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3 pl-10 pr-4 text-gray-900 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 placeholder:text-gray-400"
                 />
               </div>
-              
-              {/* To Suggestions Dropdown */}
               {showToSuggestions && filteredTo.length > 0 && (
                 <ul className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
-                  {filteredTo.map((loc, index) => (
+                  {filteredTo.map((loc, i) => (
                     <li 
-                      key={`to-${index}`}
-                      onClick={() => {
-                        setTo(loc.name);
-                        setShowToSuggestions(false);
-                      }}
-                      className="px-4 py-3 hover:bg-emerald-50 cursor-pointer text-gray-900 text-sm border-b border-gray-50 last:border-0 transition-colors"
+                      key={`to-${i}`}
+                      onClick={() => { setTo(loc.name); setShowToSuggestions(false); }}
+                      className="px-4 py-3 hover:bg-emerald-50 cursor-pointer text-gray-900 text-sm border-b border-gray-50 last:border-0"
                     >
                       {loc.name}
                     </li>
@@ -174,7 +178,7 @@ export default function SearchPage() {
 
           <div className="h-px w-full bg-gray-100" />
 
-          {/* Shifts Selection */}
+          {/* Shift Selection */}
           <div className="space-y-2">
             <label className="text-xs font-bold uppercase tracking-wide text-gray-500">Your Shift</label>
             <div className="grid grid-cols-2 gap-2">
@@ -192,7 +196,7 @@ export default function SearchPage() {
                   >
                     <Icon className={`h-5 w-5 ${isSelected ? "text-emerald-600" : "text-gray-400"}`} />
                     <span className="text-sm font-semibold">{shift.label}</span>
-                    <span className="text-xs">{shift.time}</span>
+                    <span className="text-[10px] uppercase tracking-wider">{shift.time}</span>
                   </button>
                 );
               })}
@@ -200,15 +204,17 @@ export default function SearchPage() {
           </div>
 
           <button
-            type="button"
-            onClick={handleSearch}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-4 text-lg font-bold text-white shadow-md transition-colors hover:bg-emerald-700 active:scale-[0.98]"
+            type="submit"
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-4 text-lg font-bold text-white shadow-md transition-colors hover:bg-emerald-700 active:scale-[0.98]"
           >
             <Search className="h-5 w-5" />
             Find Available Seats
           </button>
         </form>
       </main>
+
+      {/* The Bottom Nav component handles its own positioning, but pb-24 above makes room for it */}
+      <PassengerBottomNav />
     </div>
   );
 }
