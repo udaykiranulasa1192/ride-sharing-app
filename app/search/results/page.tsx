@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { Car, Star, Users, Calendar, ArrowLeft, Loader2, X, MapPin, RadioTower, CheckCircle, Mail, Lock, Phone, User as UserIcon } from "lucide-react";
+import { Car, Users, Calendar, ArrowLeft, Loader2, X, RadioTower, CheckCircle, Phone } from "lucide-react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
@@ -32,9 +32,11 @@ function ResultsContent() {
   const [rides, setRides] = useState<Ride[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // --- AUTHENTICATION STATE ---
+  // --- AUTH & TRACKING STATE ---
   const [authUser, setAuthUser] = useState<any>(null);
   const [passengerProfile, setPassengerProfile] = useState<any>(null);
+  const [sentRequests, setSentRequests] = useState<string[]>([]); // Tracks which rides we've requested
+  const [showSuccessBanner, setShowSuccessBanner] = useState(false); // Shows a nice success message
   
   // --- MODAL STATE ---
   const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
@@ -50,7 +52,6 @@ function ResultsContent() {
   const [postcode, setPostcode] = useState("");
 
   useEffect(() => {
-    // 1. Check for logged-in user
     async function checkAuth() {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
@@ -60,7 +61,6 @@ function ResultsContent() {
       }
     }
     
-    // 2. Fetch the actual rides
     async function fetchRides() {
       let query = supabase.from('rides').select('*');
       if (searchCity) query = query.ilike('outward_code', searchCity);
@@ -77,17 +77,14 @@ function ResultsContent() {
     else setLoading(false);
   }, [searchCity, dest, shift]);
 
-  // Handle authenticating a new or returning user inside the modal
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
 
     if (authMode === 'signup') {
-      // 1. Sign up
       const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
       if (authError) { alert(authError.message); setIsSubmitting(false); return; }
       
-      // 2. Create Profile
       if (authData.user) {
         const { error: profileError } = await supabase.from('passenger_profiles').insert([{
           id: authData.user.id,
@@ -103,7 +100,6 @@ function ResultsContent() {
         }
       }
     } else {
-      // Login
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password });
       if (authError) { alert(authError.message); setIsSubmitting(false); return; }
       
@@ -116,7 +112,6 @@ function ResultsContent() {
     setIsSubmitting(false);
   };
 
-  // Handle sending the actual ride request once they are logged in
   const handleConfirmRequest = async () => {
     if (!selectedRideId || !passengerProfile) return;
     setIsSubmitting(true);
@@ -134,23 +129,42 @@ function ResultsContent() {
     if (error) {
       alert("Failed to send request. Please try again.");
     } else {
-      alert("Success! Request sent to the driver.");
-      setSelectedRideId(null); 
+      // SUCCESS! Update UI instead of showing an annoying alert
+      setSentRequests([...sentRequests, selectedRideId]); // Mark this ride as requested
+      setSelectedRideId(null); // Close modal
+      setShowSuccessBanner(true); // Show banner
+      
+      // Hide banner after 5 seconds
+      setTimeout(() => setShowSuccessBanner(false), 5000);
     }
   };
 
   const today = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
+  // FIXED: A shared class that forces text to be dark gray (text-gray-900)
+  const inputClassName = "w-full rounded-xl border border-gray-300 bg-gray-50 p-3 text-sm text-gray-900 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all placeholder:text-gray-400";
+
   return (
     <>
-      <div className="mb-6 rounded-2xl bg-emerald-600 p-5 text-white shadow-md">
-        <h1 className="text-xl font-extrabold tracking-tight mb-2 uppercase">
+      <div className="mb-6 rounded-2xl bg-emerald-600 p-5 text-white shadow-md relative overflow-hidden">
+        <h1 className="text-xl font-extrabold tracking-tight mb-2 uppercase relative z-10">
           {searchCity} to {dest}
         </h1>
-        <div className="flex items-center gap-1.5 text-sm font-medium text-emerald-100">
+        <div className="flex items-center gap-1.5 text-sm font-medium text-emerald-100 relative z-10">
           <Calendar className="h-4 w-4" /> {today} ({shift})
         </div>
       </div>
+
+      {/* NEW: Success Banner */}
+      {showSuccessBanner && (
+        <div className="mb-6 rounded-2xl bg-emerald-50 border border-emerald-200 p-4 flex items-start gap-3 animate-in fade-in slide-in-from-top-4 duration-300">
+          <CheckCircle className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+          <div>
+            <h3 className="text-sm font-bold text-emerald-900">Request Sent Successfully!</h3>
+            <p className="text-xs text-emerald-700 mt-1">The driver has been notified. They will message you on WhatsApp if they accept your request.</p>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex flex-col items-center justify-center py-12 text-gray-500">
@@ -162,32 +176,47 @@ function ResultsContent() {
            <RadioTower className="h-12 w-12 text-gray-300 mx-auto mb-3" />
            <h2 className="text-lg font-extrabold text-gray-900 mb-1">No active drivers found.</h2>
            <p className="text-gray-500 text-sm mb-4">Post a request to the opportunities board so drivers know you need a ride.</p>
-           {/* Note: To keep code clean, we will route them to a dedicated broadcast page later, or just show a button here. */}
         </div>
       ) : (
         <div className="space-y-4">
-          {rides.map((ride) => (
-            <div key={ride.id} className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-all">
-              <div className="p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-lg font-bold text-gray-900">{ride.driver_name}</h2>
-                  <div className="text-xl font-black text-gray-900">£{ride.price}</div>
+          {rides.map((ride) => {
+            const hasRequested = sentRequests.includes(ride.id);
+
+            return (
+              <div key={ride.id} className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition-all ${hasRequested ? 'border-emerald-200 ring-1 ring-emerald-100' : 'border-gray-200 hover:shadow-md'}`}>
+                <div className="p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-lg font-bold text-gray-900">{ride.driver_name}</h2>
+                    <div className="text-xl font-black text-gray-900">£{ride.price}</div>
+                  </div>
+                  <div className="space-y-1.5 mb-4 text-sm text-gray-600">
+                    <div className="flex items-center gap-2"><Car className="h-4 w-4 text-gray-400" /> {ride.vehicle}</div>
+                    <div className="flex items-center gap-2"><Calendar className="h-4 w-4 text-gray-400" /> <span className="font-semibold text-gray-900">Leaves at {ride.departure_time}</span></div>
+                    <div className="flex items-center gap-2"><Users className="h-4 w-4 text-gray-400" /> {ride.seats_available} seats left</div>
+                  </div>
+                  
+                  {/* FIXED: Dynamic Button State */}
+                  <button 
+                    onClick={() => !hasRequested && setSelectedRideId(ride.id)}
+                    disabled={hasRequested}
+                    className={`w-full rounded-xl py-3.5 text-sm font-bold transition-all active:scale-[0.98] flex justify-center items-center gap-2 ${
+                      hasRequested 
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-not-allowed' 
+                        : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                    }`}
+                  >
+                    {hasRequested ? (
+                      <>
+                        <CheckCircle className="h-4 w-4" /> Request Sent
+                      </>
+                    ) : (
+                      "Request Seat"
+                    )}
+                  </button>
                 </div>
-                <div className="space-y-1.5 mb-4 text-sm text-gray-600">
-                  <div className="flex items-center gap-2"><Car className="h-4 w-4 text-gray-400" /> {ride.vehicle}</div>
-                  <div className="flex items-center gap-2"><Calendar className="h-4 w-4 text-gray-400" /> <span className="font-semibold text-gray-900">Leaves at {ride.departure_time}</span></div>
-                  <div className="flex items-center gap-2"><Users className="h-4 w-4 text-gray-400" /> {ride.seats_available} seats left</div>
-                </div>
-                
-                <button 
-                  onClick={() => setSelectedRideId(ride.id)}
-                  className="w-full rounded-xl bg-emerald-600 py-3.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700 active:scale-[0.98]"
-                >
-                  Request Seat
-                </button>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -209,12 +238,21 @@ function ResultsContent() {
               // STATE 1: USER IS LOGGED IN
               <div className="space-y-5">
                 <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-100">
-                  <p className="text-sm text-emerald-800 mb-2">We will send this data to the driver:</p>
-                  <ul className="text-sm font-bold text-emerald-900 space-y-1">
-                    <li>Name: {passengerProfile.first_name} {passengerProfile.last_name}</li>
-                    <li>Phone: {passengerProfile.mobile_number}</li>
-                    <li>Pickup: {passengerProfile.postcode}</li>
-                  </ul>
+                  <p className="text-sm text-emerald-800 mb-3">We will send this data to the driver:</p>
+                  <div className="space-y-2">
+                    <div className="flex justify-between border-b border-emerald-100 pb-2">
+                      <span className="text-emerald-700 text-xs font-bold uppercase">Name</span>
+                      <span className="text-emerald-900 font-semibold text-sm">{passengerProfile.first_name} {passengerProfile.last_name}</span>
+                    </div>
+                    <div className="flex justify-between border-b border-emerald-100 pb-2">
+                      <span className="text-emerald-700 text-xs font-bold uppercase">Phone</span>
+                      <span className="text-emerald-900 font-semibold text-sm">{passengerProfile.mobile_number}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-emerald-700 text-xs font-bold uppercase">Pickup</span>
+                      <span className="text-emerald-900 font-semibold text-sm">{passengerProfile.postcode}</span>
+                    </div>
+                  </div>
                 </div>
                 <button
                   onClick={handleConfirmRequest}
@@ -226,42 +264,41 @@ function ResultsContent() {
                 </button>
               </div>
             ) : (
-              // STATE 2: USER IS NOT LOGGED IN (Show Auth Form)
+              // STATE 2: USER IS NOT LOGGED IN 
+              // FIXED: Completely stacked vertically (no grid), using inputClassName to ensure text is visible!
               <form onSubmit={handleAuth} className="space-y-4">
                 
                 {authMode === 'signup' && (
                   <>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold uppercase text-gray-500">First Name</label>
-                        <input required type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} className="w-full rounded-lg border border-gray-300 bg-gray-50 p-2.5 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold uppercase text-gray-500">Last Name</label>
-                        <input required type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} className="w-full rounded-lg border border-gray-300 bg-gray-50 p-2.5 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase text-gray-500">First Name</label>
+                      <input required type="text" placeholder="e.g., Jane" value={firstName} onChange={(e) => setFirstName(e.target.value)} className={inputClassName} />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase text-gray-500">Last Name</label>
+                      <input required type="text" placeholder="e.g., Doe" value={lastName} onChange={(e) => setLastName(e.target.value)} className={inputClassName} />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase text-gray-500">WhatsApp Number</label>
+                      <div className="relative">
+                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                        <input required type="tel" placeholder="07700 900000" value={mobile} onChange={(e) => setMobile(e.target.value)} className={`${inputClassName} pl-9`} />
                       </div>
                     </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold uppercase text-gray-500">WhatsApp</label>
-                        <input required type="tel" value={mobile} onChange={(e) => setMobile(e.target.value)} className="w-full rounded-lg border border-gray-300 bg-gray-50 p-2.5 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold uppercase text-gray-500">Pickup Postcode</label>
-                        <input required type="text" value={postcode} onChange={(e) => setPostcode(e.target.value)} className="w-full rounded-lg border border-gray-300 bg-gray-50 p-2.5 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 uppercase" />
-                      </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase text-gray-500">Pickup Postcode</label>
+                      <input required type="text" placeholder="e.g., CF24 4QY" value={postcode} onChange={(e) => setPostcode(e.target.value)} className={`${inputClassName} uppercase`} />
                     </div>
                   </>
                 )}
 
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold uppercase text-gray-500">Email</label>
-                  <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full rounded-lg border border-gray-300 bg-gray-50 p-2.5 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
+                  <label className="text-[10px] font-bold uppercase text-gray-500">Email Address</label>
+                  <input required type="email" placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} className={inputClassName} />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold uppercase text-gray-500">Password</label>
-                  <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full rounded-lg border border-gray-300 bg-gray-50 p-2.5 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
+                  <input required type="password" placeholder="Min. 6 characters" value={password} onChange={(e) => setPassword(e.target.value)} className={inputClassName} />
                 </div>
 
                 <button
@@ -269,7 +306,7 @@ function ResultsContent() {
                   disabled={isSubmitting}
                   className="w-full rounded-xl bg-emerald-600 mt-2 py-3.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700 active:scale-[0.98] disabled:opacity-70"
                 >
-                  {isSubmitting ? "Processing..." : (authMode === 'signup' ? "Create Profile to Continue" : "Log In to Continue")}
+                  {isSubmitting ? "Processing..." : (authMode === 'signup' ? "Create Profile & Continue" : "Log In & Continue")}
                 </button>
 
                 <div className="text-center mt-4">
@@ -279,7 +316,6 @@ function ResultsContent() {
                 </div>
               </form>
             )}
-
           </div>
         </div>
       )}
@@ -290,12 +326,16 @@ function ResultsContent() {
 export default function ResultsPage() {
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
-      <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/95 backdrop-blur px-4 py-3 shadow-sm flex items-center gap-3">
-        <Link href="/search" className="p-1 rounded-full hover:bg-gray-100 transition-colors"><ArrowLeft className="h-6 w-6 text-gray-700" /></Link>
-        <span className="text-lg font-bold text-gray-900">ShiftPool</span>
+      <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/95 backdrop-blur px-4 py-3 shadow-sm flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Link href="/search" className="p-1 rounded-full hover:bg-gray-100 transition-colors">
+            <ArrowLeft className="h-6 w-6 text-gray-700" />
+          </Link>
+          <span className="text-lg font-bold text-gray-900">ShiftPool</span>
+        </div>
       </header>
       <main className="mx-auto max-w-md px-4 py-6">
-        <Suspense fallback={<div>Loading...</div>}>
+        <Suspense fallback={<div className="py-12 text-center text-gray-500">Loading...</div>}>
           <ResultsContent />
         </Suspense>
       </main>
