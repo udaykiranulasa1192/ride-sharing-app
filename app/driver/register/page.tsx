@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState } from "react";
@@ -37,22 +36,28 @@ export default function DriverRegister() {
     }
 
     if (authData.user) {
-      // 2. Create the driver profile in our custom table
+      // Split the full name into first and last name for the database
+      const nameParts = formData.fullName.trim().split(" ");
+      const firstName = nameParts[0];
+      const lastName = nameParts.slice(1).join(" ") || " ";
+
+      // 2. Create the driver profile in our custom table (NO GHOSTS!)
       const { error: profileError } = await supabase.from("driver_profiles").insert([
         {
-          id: authData.user.id, // Hard-link to the Auth ID
-          full_name: formData.fullName,
-          car_model: formData.carModel,
-          car_reg: formData.carReg.toUpperCase(),
-          phone: formData.phone,
-          postcode: formData.postcode.toUpperCase(),
+          id: authData.user.id, 
+          first_name: firstName,
+          last_name: lastName,
+          vehicle_details: formData.carModel,
+          registration_number: formData.carReg.toUpperCase(),
+          mobile_number: formData.phone,
+          // Note: postcode is omitted from the insert to prevent crashes, 
+          // as we didn't add it to the driver_profiles table!
         },
       ]);
 
       if (profileError) {
         alert("Error creating profile: " + profileError.message);
       } else {
-        alert("Registration successful!");
         router.push("/driver/dashboard");
       }
     }
