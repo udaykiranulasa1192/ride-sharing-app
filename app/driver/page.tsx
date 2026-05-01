@@ -2,9 +2,17 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Car, MapPin, Navigation, Clock, PoundSterling, Users, ShieldCheck, Loader2, User } from "lucide-react";
+import { Car, MapPin, Navigation, Clock, PoundSterling, Users, ShieldCheck, Loader2, User, Sunrise, Sun, Moon } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
+
+// Brought over from Passenger Search for perfectly unified UI
+const shifts = [
+  { id: "morning", label: "Morning", time: "6AM - 2PM", icon: Sunrise },
+  { id: "afternoon", label: "Afternoon", time: "2PM - 10PM", icon: Sun },
+  { id: "night", label: "Night", time: "10PM - 6AM", icon: Moon },
+  { id: "custom", label: "Custom", time: "Flexible", icon: Clock },
+];
 
 export default function DriverPage() {
   const router = useRouter();
@@ -15,8 +23,7 @@ export default function DriverPage() {
   // --- FORM & AUTOCOMPLETE STATE ---
   const [from, setFrom] = React.useState("");
   const [to, setTo] = React.useState("");
-  const [shiftType, setShiftType] = React.useState("morning");
-  const [departureTime, setDepartureTime] = React.useState("");
+  const [shiftType, setShiftType] = React.useState("morning"); // Default to morning
   const [price, setPrice] = React.useState("");
   const [seatsAvailable, setSeatsAvailable] = React.useState("3");
 
@@ -76,22 +83,35 @@ export default function DriverPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!profile || !from || !to) {
-      alert("Please ensure both Starting Point and Destination are filled.");
+
+    // 1. Check exactly what is missing and give a specific error
+    if (!profile) {
+      alert("Error: Driver profile missing. The database doesn't know who is posting this ride!");
       return;
     }
+    if (!from) {
+      alert("Please enter where you are leaving from.");
+      return;
+    }
+    if (!to) {
+      alert("Please enter your destination.");
+      return;
+    }
+
     setIsSubmitting(true);
 
-    // Save the ride exactly as typed
+    const selectedShiftData = shifts.find(s => s.id === shiftType);
+    const readableTime = selectedShiftData ? selectedShiftData.time : "Flexible";
+
     const { error } = await supabase.from('rides').insert([
       {
         driver_id: profile.id,
         driver_name: profile.full_name,
         vehicle: profile.car_model,
-        outward_code: from, // Saved exactly as the driver typed/selected
-        destination_hub: to, // Saved exactly as the driver typed/selected
+        outward_code: from, 
+        destination_hub: to, 
         shift_type: shiftType,
-        departure_time: departureTime,
+        departure_time: readableTime,
         price: parseFloat(price),
         seats_available: parseInt(seatsAvailable),
       }
@@ -100,13 +120,13 @@ export default function DriverPage() {
     setIsSubmitting(false);
 
     if (error) {
-      alert("Error posting ride. Please try again.");
+      alert("Error posting ride. Check the console.");
       console.error(error);
     } else {
       router.push('/driver/dashboard');
     }
   };
-
+  
   if (loadingProfile) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 pb-20">
@@ -150,7 +170,6 @@ export default function DriverPage() {
           {/* Route Details */}
           <div className="space-y-4">
             
-            {/* FROM AUTOCOMPLETE */}
             <div className="space-y-1.5 relative">
               <label className="text-xs font-bold uppercase tracking-wide text-gray-500">Leaving From</label>
               <div className="relative">
@@ -158,7 +177,7 @@ export default function DriverPage() {
                 <input
                   required
                   type="text"
-                  placeholder="Postcode or Workplace..."
+                  placeholder="City or Workplace (e.g., Cardiff)"
                   value={from}
                   onChange={handleFromChange}
                   onFocus={() => { if (from.length > 0) setShowFromSuggestions(true); }}
@@ -177,7 +196,6 @@ export default function DriverPage() {
               )}
             </div>
 
-            {/* TO AUTOCOMPLETE */}
             <div className="space-y-1.5 relative">
               <label className="text-xs font-bold uppercase tracking-wide text-gray-500">Going To</label>
               <div className="relative">
@@ -185,7 +203,7 @@ export default function DriverPage() {
                 <input
                   required
                   type="text"
-                  placeholder="Postcode or Workplace..."
+                  placeholder="City or Workplace (e.g., The Range)"
                   value={to}
                   onChange={handleToChange}
                   onFocus={() => { if (to.length > 0) setShowToSuggestions(true); }}
@@ -208,36 +226,28 @@ export default function DriverPage() {
 
           <div className="h-px w-full bg-gray-100" />
 
-          {/* Shift & Time Details */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold uppercase tracking-wide text-gray-500">Shift</label>
-              <select
-                required
-                value={shiftType}
-                onChange={(e) => setShiftType(e.target.value)}
-                className="w-full appearance-none rounded-xl border border-gray-300 bg-gray-50 py-3 px-4 text-gray-900 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              >
-                <option value="morning">Morning</option>
-                <option value="afternoon">Afternoon</option>
-                <option value="night">Night</option>
-                <option value="custom">Custom</option>
-              </select>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold uppercase tracking-wide text-gray-500">Leaves At</label>
-              <div className="relative">
-                <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input
-                  required
-                  type="text"
-                  placeholder="5:15 AM"
-                  value={departureTime}
-                  onChange={(e) => setDepartureTime(e.target.value)}
-                  className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3 pl-9 pr-3 text-gray-900 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 placeholder:text-gray-400"
-                />
-              </div>
+          {/* Unified Shift Selection (Replaces Departure Time Input) */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold uppercase tracking-wide text-gray-500">Your Shift</label>
+            <div className="grid grid-cols-2 gap-2">
+              {shifts.map((shift) => {
+                const Icon = shift.icon;
+                const isSelected = shiftType === shift.id;
+                return (
+                  <button
+                    key={shift.id}
+                    type="button"
+                    onClick={() => setShiftType(shift.id)}
+                    className={`flex flex-col items-center gap-1 rounded-xl border py-3 transition-all ${
+                      isSelected ? "border-emerald-600 bg-emerald-50 text-emerald-700" : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                    }`}
+                  >
+                    <Icon className={`h-5 w-5 ${isSelected ? "text-emerald-600" : "text-gray-400"}`} />
+                    <span className="text-sm font-semibold">{shift.label}</span>
+                    <span className="text-[10px] uppercase tracking-wider">{shift.time}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 

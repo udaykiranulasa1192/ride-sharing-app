@@ -17,33 +17,49 @@ interface Ride {
 
 function ResultsContent() {
   const searchParams = useSearchParams();
-  const rawPostcode = searchParams.get("postcode") || "";
+  const rawInput = searchParams.get("postcode") || "";
   const dest = searchParams.get("dest") || "Destination";
   const shift = searchParams.get("shift") || "morning";
+
+  // --- THE TRANSLATOR ENGINE ---
+  let searchCity = rawInput; // Default to exactly what they typed
+  const upperInput = rawInput.trim().toUpperCase();
+
+  // If they typed a postcode, translate it to the main City Hub for database searching
+  if (upperInput.startsWith("CF")) {
+    searchCity = "Cardiff";
+  } else if (upperInput.startsWith("NP")) {
+    searchCity = "Newport";
+  } else if (upperInput.startsWith("BS")) {
+    searchCity = "Bristol";
+  } else if (upperInput.startsWith("SA")) {
+    searchCity = "Swansea";
+  }
 
   const [rides, setRides] = useState<Ride[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Direct Booking Modal State
+  // Modal State
   const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
   const [passengerName, setPassengerName] = useState("");
   const [passengerPhone, setPassengerPhone] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Reverse Marketplace State (Broadcasting to all drivers)
+  // Reverse Marketplace State
   const [broadcastName, setBroadcastName] = useState("");
   const [broadcastPhone, setBroadcastPhone] = useState("");
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
 
-  // Clean the postcode for searching (e.g. CF24 4QY -> CF24)
-  const cleanPostcode = rawPostcode.replace(/\s+/g, '').toUpperCase();
-  const outwardCode = cleanPostcode.length > 3 ? cleanPostcode.slice(0, -3) : cleanPostcode;
-
   useEffect(() => {
     async function fetchRides() {
       let query = supabase.from('rides').select('*');
-      if (outwardCode) query = query.eq('outward_code', outwardCode);
+      
+      // We search the database using the TRANSLATED city name (e.g. "Cardiff")
+      if (searchCity) {
+        query = query.ilike('outward_code', searchCity); 
+      }
+      
       if (dest) query = query.eq('destination_hub', dest);
       if (shift) query = query.eq('shift_type', shift);
 
@@ -53,11 +69,10 @@ function ResultsContent() {
       setLoading(false);
     }
 
-    if (rawPostcode && dest) fetchRides();
+    if (searchCity && dest) fetchRides();
     else setLoading(false);
-  }, [outwardCode, dest, shift]);
+  }, [searchCity, dest, shift]);
 
-  // Handler for booking a specific driver
   const handleRequestSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRideId) return;
@@ -68,7 +83,8 @@ function ResultsContent() {
         ride_id: selectedRideId,
         passenger_name: passengerName,
         passenger_phone: passengerPhone,
-        passenger_postcode: rawPostcode.toUpperCase(),
+        // CRITICAL: We send their RAW input (e.g., CF24 4QY) to the driver, not just "Cardiff"
+        passenger_postcode: rawInput.toUpperCase(), 
         status: 'pending'
       }
     ]);
@@ -85,7 +101,6 @@ function ResultsContent() {
     }
   };
 
-  // Handler for broadcasting a generic request to all drivers
   const handleBroadcastSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsBroadcasting(true);
@@ -94,8 +109,9 @@ function ResultsContent() {
       {
         passenger_name: broadcastName,
         passenger_phone: broadcastPhone,
-        pickup_postcode: rawPostcode.toUpperCase(),
-        destination_name: dest, // Custom location saved exactly as typed
+        // Again, save their EXACT postcode for the Opportunities board
+        pickup_postcode: rawInput.toUpperCase(), 
+        destination_name: dest, 
         shift_type: shift
       }
     ]);
@@ -116,7 +132,7 @@ function ResultsContent() {
     <>
       <div className="mb-6 rounded-2xl bg-emerald-600 p-5 text-white shadow-md">
         <h1 className="text-xl font-extrabold tracking-tight mb-2 uppercase">
-          {outwardCode} to {dest}
+          {searchCity} to {dest}
         </h1>
         <div className="flex flex-wrap gap-4 text-sm font-medium text-emerald-100">
           <div className="flex items-center gap-1.5">
@@ -129,11 +145,10 @@ function ResultsContent() {
       {loading ? (
         <div className="flex flex-col items-center justify-center py-12 text-gray-500">
           <Loader2 className="h-8 w-8 animate-spin text-emerald-600 mb-4" />
-          <p>Scanning for rides in {outwardCode}...</p>
+          <p>Scanning for rides in {searchCity}...</p>
         </div>
       ) : rides.length === 0 ? (
         
-        // --- THE NEW REVERSE MARKETPLACE BOARD ---
         <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
           {broadcastSuccess ? (
             <div className="text-center py-8">
@@ -198,7 +213,6 @@ function ResultsContent() {
             </>
           )}
         </div>
-        // --- END REVERSE MARKETPLACE BOARD ---
 
       ) : (
         <>
@@ -247,7 +261,6 @@ function ResultsContent() {
         </>
       )}
 
-      {/* Existing Modal Code for when Rides ARE found */}
       {selectedRideId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
@@ -284,7 +297,7 @@ function ResultsContent() {
               
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm flex justify-between items-center">
                 <span className="text-gray-500 font-semibold">Pickup:</span>
-                <span className="font-bold text-gray-900 uppercase">{rawPostcode}</span>
+                <span className="font-bold text-gray-900 uppercase">{rawInput}</span>
               </div>
 
               <p className="text-xs text-gray-500">Your number is only shared with the driver if they accept your request.</p>
