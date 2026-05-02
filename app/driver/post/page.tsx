@@ -1,148 +1,145 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { Car, MapPin, Calendar, Clock, PoundSterling, Loader2, ArrowLeft } from "lucide-react";
+import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
-import DriverAuthForm from "@/components/DriverAuthForm";
+import { useRouter } from "next/navigation";
+import { Loader2, Navigation, Calendar, Clock, Users, Car, CheckCircle } from "lucide-react";
 import Link from "next/link";
 
 export default function PostRidePage() {
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [profile, setProfile] = useState<any>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [driverProfile, setDriverProfile] = useState<any>(null);
 
   // Form State
-  const [outwardCode, setOutwardCode] = useState("");
-  const [destinationHub, setDestinationHub] = useState("Amazon DBS2");
-  const [shiftType, setShiftType] = useState("morning");
-  const [departureTime, setDepartureTime] = useState("");
-  const [seats, setSeats] = useState("3");
-  const [price, setPrice] = useState("4.50");
+  const [destination, setDestination] = useState("");
+  const [date, setDate] = useState("");
+  const [shiftTime, setShiftTime] = useState("06:00 - 14:00");
+  const [seats, setSeats] = useState(3);
 
-  const checkAuth = async () => {
+  // Shift block presets (matches your earlier 6AM-2PM requirements)
+  const shiftOptions = [
+    "06:00 - 14:00",
+    "14:00 - 22:00",
+    "22:00 - 06:00",
+    "08:00 - 16:00"
+  ];
+
+  useEffect(() => {
+    async function fetchProfile() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        router.push('/driver/login');
+        return;
+      }
+      const { data } = await supabase.from('driver_profiles').select('*').eq('id', user.id).single();
+      if (data) setDriverProfile(data);
+    }
+    fetchProfile();
+  }, [router]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setIsLoggedIn(false);
+    setError(null);
+
+    if (!driverProfile) {
+      setError("Driver profile not found. Please log in again.");
       setLoading(false);
       return;
     }
-    
-    setIsLoggedIn(true);
-    // Fetch their specific Driver Profile!
-    const { data: profileData } = await supabase.from('driver_profiles').select('*').eq('id', user.id).single();
-    if (profileData) setProfile(profileData);
-    setLoading(false);
-  };
 
-  useEffect(() => {
-    checkAuth();
-  }, []);
+    // Split the shift time for the database
+    const [start] = shiftTime.split(" - ");
 
-  const handlePostRide = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!profile) return alert("Error: Driver Profile not found. Please re-login.");
-    
-    setIsSubmitting(true);
-
-    const { error } = await supabase.from('rides').insert([{
-      driver_name: `${profile.first_name} ${profile.last_name}`,
-      vehicle: profile.vehicle_details,
-      price: parseFloat(price),
-      seats_available: parseInt(seats),
-      departure_time: departureTime,
-      outward_code: outwardCode.toUpperCase(),
-      destination_hub: destinationHub,
-      shift_type: shiftType
+    const { error: insertError } = await supabase.from('rides').insert([{
+      driver_id: driverProfile.id,
+      driver_name: `${driverProfile.first_name} ${driverProfile.last_name}`,
+      vehicle: driverProfile.vehicle_details,
+      ride_date: date,
+      departure_time: start, // Using start time as the departure reference
+      trip_type: 'one_way', // MVP default
+      base_price_per_person: 5.00, // MVP flat rate
+      total_seats_capacity: seats,
+      remaining_seats: seats,
+      destination_hub: destination,
+      status: 'active'
     }]);
 
-    setIsSubmitting(false);
-
-    if (error) {
-      alert("Failed to post ride. Please try again.");
+    if (insertError) {
+      setError(insertError.message);
+      setLoading(false);
     } else {
-      router.push("/driver/dashboard"); // Send them to the job board!
+      setSuccess(true);
+      setTimeout(() => router.push('/driver/dashboard'), 1500);
     }
   };
 
-  if (loading) return <div className="min-h-screen flex justify-center items-center bg-gray-50"><Loader2 className="h-8 w-8 animate-spin text-blue-600" /></div>;
+  if (!driverProfile) return <div className="flex justify-center p-20"><Loader2 className="animate-spin text-emerald-600" /></div>;
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-24">
-      <header className="bg-white px-4 py-4 border-b border-gray-200 shadow-sm flex items-center gap-3 sticky top-0 z-50">
-        <Link href="/driver/dashboard" className="p-2 rounded-full hover:bg-gray-100 transition-colors">
-          <ArrowLeft className="h-6 w-6 text-gray-700" />
+    <div className="max-w-md mx-auto p-4 pt-8">
+      <div className="flex items-center gap-3 mb-8">
+        <Link href="/driver/dashboard" className="p-2 -ml-2 bg-gray-100 rounded-full hover:bg-gray-200">
+          <ArrowLeft className="h-5 w-5" />
         </Link>
-        <h1 className="text-xl font-black text-gray-900 uppercase tracking-tight">Post a Ride</h1>
-      </header>
+        <h1 className="text-2xl font-black text-gray-900 tracking-tight">Post a Shift</h1>
+      </div>
 
-      <main className="max-w-md mx-auto p-4 mt-4">
-        {!isLoggedIn || !profile ? (
-          <DriverAuthForm onSuccess={checkAuth} />
-        ) : (
-          <form onSubmit={handlePostRide} className="bg-white rounded-3xl p-6 shadow-sm border border-gray-200 space-y-5">
-            
-            <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm font-medium border border-blue-100 flex items-center gap-3">
-              <Car className="h-6 w-6 text-blue-600 shrink-0" />
-              Posting as {profile.first_name} ({profile.vehicle_details})
+      {success ? (
+        <div className="bg-emerald-50 border border-emerald-200 p-8 rounded-3xl text-center">
+          <CheckCircle className="h-16 w-16 text-emerald-500 mx-auto mb-4" />
+          <h2 className="text-xl font-black text-emerald-900">Shift Posted!</h2>
+          <p className="text-sm font-bold text-emerald-700 mt-2">Redirecting to your dashboard...</p>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm space-y-5">
+          {error && <div className="p-3 bg-red-50 text-red-600 text-sm font-bold rounded-xl">{error}</div>}
+
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Destination Workplace</label>
+            <div className="relative">
+              <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-600" />
+              <input required type="text" placeholder="e.g. Amazon DBS2" value={destination} onChange={(e) => setDestination(e.target.value)} className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-bold" />
             </div>
+          </div>
 
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold uppercase text-gray-500">Leaving From (Town/City)</label>
-              <div className="relative">
-                <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-                <input required type="text" placeholder="e.g. Cardiff" value={outwardCode} onChange={(e) => setOutwardCode(e.target.value)} className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3 pl-10 pr-4 text-sm text-gray-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none" />
-              </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Date</label>
+            <div className="relative">
+              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-600" />
+              <input required type="date" min={new Date().toISOString().split('T')[0]} value={date} onChange={(e) => setDate(e.target.value)} className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-bold" />
             </div>
+          </div>
 
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold uppercase text-gray-500">Destination Hub</label>
-              <select value={destinationHub} onChange={(e) => setDestinationHub(e.target.value)} className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3 px-4 text-sm text-gray-900 focus:border-blue-500 outline-none">
-                <option value="Amazon DBS2">Amazon DBS2</option>
-                <option value="Amazon CWL1">Amazon CWL1</option>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Shift Block</label>
+            <div className="relative">
+              <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-600" />
+              <select required value={shiftTime} onChange={(e) => setShiftTime(e.target.value)} className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-bold appearance-none">
+                {shiftOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
               </select>
             </div>
+          </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase text-gray-500">Shift</label>
-                <select value={shiftType} onChange={(e) => setShiftType(e.target.value)} className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3 px-4 text-sm text-gray-900 focus:border-blue-500 outline-none">
-                  <option value="morning">Morning</option>
-                  <option value="night">Night</option>
-                </select>
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase text-gray-500">Departure Time</label>
-                <div className="relative">
-                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                  <input required type="text" placeholder="05:30 AM" value={departureTime} onChange={(e) => setDepartureTime(e.target.value)} className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3 pl-9 pr-4 text-sm text-gray-900 focus:border-blue-500 outline-none" />
-                </div>
-              </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Available Seats</label>
+            <div className="relative">
+              <Users className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-600" />
+              <input required type="number" min="1" max="6" value={seats} onChange={(e) => setSeats(Number(e.target.value))} className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-bold" />
             </div>
+          </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase text-gray-500">Seats</label>
-                <input required type="number" min="1" max="6" value={seats} onChange={(e) => setSeats(e.target.value)} className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3 px-4 text-sm text-gray-900 focus:border-blue-500 outline-none" />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase text-gray-500">Price per Seat</label>
-                <div className="relative">
-                  <PoundSterling className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                  <input required type="number" step="0.50" value={price} onChange={(e) => setPrice(e.target.value)} className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3 pl-9 pr-4 text-sm text-gray-900 focus:border-blue-500 outline-none" />
-                </div>
-              </div>
-            </div>
-
-            <button type="submit" disabled={isSubmitting} className="w-full mt-2 rounded-xl bg-blue-600 py-4 text-sm font-bold text-white transition-colors hover:bg-blue-700 active:scale-[0.98] disabled:opacity-70 flex justify-center items-center gap-2">
-              {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : "Publish Ride"}
+          <div className="pt-2">
+            <button type="submit" disabled={loading} className="w-full bg-gray-900 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-black transition-all active:scale-[0.98] disabled:opacity-50">
+              {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Car className="h-5 w-5" />}
+              Broadcast Empty Seats
             </button>
-          </form>
-        )}
-      </main>
+          </div>
+        </form>
+      )}
     </div>
   );
 }

@@ -6,7 +6,13 @@ import { Loader2, ArrowLeft, Car, Phone } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-export default function PassengerAuthForm() {
+// 1. ADD THE INTERFACE
+interface PassengerAuthFormProps {
+  onSuccess?: () => void | Promise<void>; 
+}
+
+// 2. APPLY IT TO THE COMPONENT SIGNATURE
+export default function PassengerAuthForm({ onSuccess }: PassengerAuthFormProps) {
   const router = useRouter();
   const [isLogin, setIsLogin] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -43,7 +49,13 @@ export default function PassengerAuthForm() {
           password,
         });
         if (error) throw error;
-        router.push("/passenger/dashboard");
+        
+        // 3. USE THE PROP UPON SUCCESSFUL LOGIN
+        if (onSuccess) {
+          await onSuccess();
+        } else {
+          router.push("/passenger/dashboard");
+        }
       } else {
         // Registration Flow
         // Ensure phone number is a valid UK length (roughly 10 digits after +44)

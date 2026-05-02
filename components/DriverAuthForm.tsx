@@ -5,8 +5,13 @@ import { supabase } from "@/lib/supabase";
 import { Loader2, Phone, Mail, Lock, User, Car, Hash, MapPin, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+// 1. Define exactly what props this component is allowed to accept
+interface DriverAuthFormProps {
+  onSuccess: () => void | Promise<boolean>; 
+}
 
-export default function DriverAuthForm({ onSuccess }: { onSuccess: () => void }) {
+// 2. Apply the interface to the component
+export default function DriverAuthForm({ onSuccess }: DriverAuthFormProps) {
   const router = useRouter();
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [isSubmitting, setIsSubmitting] = useState(false);
