@@ -18,9 +18,10 @@ export default function PassengerDashboard() {
   const [myRequests, setMyRequests] = useState<any[]>([]);
   const [myBroadcasts, setMyBroadcasts] = useState<any[]>([]);
 
-  const fetchDashboardData = async () => {
+const fetchDashboardData = async () => {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
+    
     if (!user) {
       setIsLoggedIn(false);
       setLoading(false);
@@ -28,25 +29,33 @@ export default function PassengerDashboard() {
     }
     
     setIsLoggedIn(true);
-    const { data: profileData } = await supabase.from('passenger_profiles').select('*').eq('id', user.id).single();
+    // 1. Fetch the Profile
+    const { data: profileData } = await supabase
+      .from('passenger_profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single();
     
     if (profileData) {
       setProfile(profileData);
-      
-      // 1. Fetch Standard Bookings (Seats they requested from a specific driver)
+
+      // 2. Fetch Direct Requests (Specific rides they booked)
+      // We join with the 'rides' table so we can show the destination and time!
       const { data: requestsData } = await supabase
         .from('ride_requests')
-        .select('*, rides(driver_name, vehicle, departure_time, outward_code, destination_hub)')
+        .select('*, rides(*)') 
         .eq('passenger_phone', profileData.mobile_number)
         .order('created_at', { ascending: false });
+      
       if (requestsData) setMyRequests(requestsData);
 
-      // 2. Fetch Open Broadcasts (General requests to the Opportunities Board)
+      // 3. Fetch Broadcasts (The custom alerts they sent to drivers)
       const { data: broadcastsData } = await supabase
         .from('open_requests')
         .select('*')
         .eq('passenger_id', user.id)
         .order('created_at', { ascending: false });
+
       if (broadcastsData) setMyBroadcasts(broadcastsData);
     }
     setLoading(false);

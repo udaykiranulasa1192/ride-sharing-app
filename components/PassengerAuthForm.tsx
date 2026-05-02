@@ -2,88 +2,161 @@
 
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Phone, Mail, Lock, User, MapPin } from "lucide-react";
+import { Loader2, ArrowLeft, Car, Phone } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 
-export default function PassengerAuthForm({ onSuccess }: { onSuccess: () => void }) {
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
+export default function PassengerAuthForm() {
+  const router = useRouter();
+  const [isLogin, setIsLogin] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
+  // Form State
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
-  const [mobile, setMobile] = useState("");
-  const [postcode, setPostcode] = useState("");
+  const [phone, setPhone] = useState("+44"); // Locked Default
+
+  // Strict UK Phone Formatter
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let val = e.target.value;
+    // Prevent user from deleting the +44 prefix
+    if (!val.startsWith("+44")) {
+      val = "+44";
+    }
+    // Only allow numbers after the prefix
+    const rawNumber = val.replace("+44", "").replace(/[^0-9]/g, "");
+    setPhone("+44" + rawNumber);
+  };
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSubmitting(true);
-    setErrorMsg("");
+    setLoading(true);
+    setError(null);
 
     try {
-      if (authMode === 'signup') {
-        const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
-        if (authError) throw authError;
-
-        if (authData.user) {
-          const { error: profileError } = await supabase.from('passenger_profiles').insert([{
-            id: authData.user.id,
-            first_name: firstName,
-            last_name: lastName,
-            mobile_number: mobile,
-            postcode: postcode.toUpperCase()
-          }]);
-          if (profileError) throw profileError;
-        }
+      if (isLogin) {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) throw error;
+        router.push("/passenger/dashboard");
       } else {
-        const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
-        if (authError) throw authError;
+        // Registration Flow
+        // Ensure phone number is a valid UK length (roughly 10 digits after +44)
+        if (phone.length < 12 || phone.length > 13) {
+          throw new Error("Please enter a valid UK mobile number.");
+        }
+
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              first_name: firstName,
+              last_name: lastName,
+              phone_number: phone,
+              role: 'passenger' // Explicitly tag them
+            }
+          }
+        });
+        if (error) throw error;
+        
+        alert("Registration successful! You can now log in.");
+        setIsLogin(true);
       }
-      
-      // Tell the parent page (Dashboard or Profile) to refresh!
-      onSuccess();
-      
     } catch (err: any) {
-      setErrorMsg(err.message || "An error occurred.");
+      setError(err.message);
     } finally {
-      setIsSubmitting(false);
+      setLoading(false);
     }
   };
 
-  const inputClass = "w-full rounded-xl border border-gray-300 bg-gray-50 py-3 pl-10 pr-4 text-sm text-gray-900 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all placeholder:text-gray-400";
-
   return (
-    <div className="bg-white rounded-3xl border border-gray-200 p-6 shadow-sm">
-      <h2 className="text-xl font-black text-gray-900 text-center mb-6">
-        {authMode === 'login' ? 'Log In' : 'Create Account'}
-      </h2>
-
-      <div className="flex rounded-xl bg-gray-100 p-1 mb-6">
-        <button onClick={() => setAuthMode('login')} type="button" className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${authMode === 'login' ? 'bg-white shadow-sm text-emerald-700' : 'text-gray-500'}`}>Log In</button>
-        <button onClick={() => setAuthMode('signup')} type="button" className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${authMode === 'signup' ? 'bg-white shadow-sm text-emerald-700' : 'text-gray-500'}`}>Sign Up</button>
+    <div className="w-full max-w-md mx-auto p-6 bg-white rounded-3xl shadow-xl border border-gray-100">
+      
+      {/* HEADER: Navigation & Logo */}
+      <div className="flex items-center justify-between mb-8">
+        <button 
+          onClick={() => router.back()} 
+          className="p-2 -ml-2 rounded-full hover:bg-gray-100 text-gray-500 transition-colors"
+          aria-label="Go back"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+        
+        <Link href="/" className="flex items-center gap-2 group">
+          <div className="bg-emerald-600 p-2 rounded-xl group-hover:bg-emerald-700 transition-colors">
+            <Car className="h-5 w-5 text-white" />
+          </div>
+          <span className="font-black text-xl tracking-tight text-gray-900 group-hover:text-emerald-700 transition-colors">ShiftPool</span>
+        </Link>
+        <div className="w-9" /> {/* Spacer for centering */}
       </div>
 
-      {errorMsg && <div className="mb-4 p-3 bg-red-50 text-red-600 text-xs font-medium rounded-lg">{errorMsg}</div>}
+      <div className="mb-6">
+        <h2 className="text-2xl font-black text-gray-900 tracking-tight">
+          {isLogin ? "Welcome back" : "Create passenger account"}
+        </h2>
+        <p className="text-sm font-bold text-gray-400 mt-1">
+          {isLogin ? "Enter your details to find a ride." : "Join to start booking shifts."}
+        </p>
+      </div>
+
+      {error && (
+        <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-xl text-sm font-bold border border-red-100">
+          {error}
+        </div>
+      )}
 
       <form onSubmit={handleAuth} className="space-y-4">
-        {authMode === 'signup' && (
-          <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
+        {!isLogin && (
+          <>
             <div className="grid grid-cols-2 gap-4">
-              <div className="relative"><User className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" /><input required type="text" placeholder="First Name" value={firstName} onChange={e => setFirstName(e.target.value)} className={inputClass} /></div>
-              <div className="relative"><User className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" /><input required type="text" placeholder="Last Name" value={lastName} onChange={e => setLastName(e.target.value)} className={inputClass} /></div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">First Name</label>
+                <input required type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-medium" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Last Name</label>
+                <input required type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-medium" />
+              </div>
             </div>
-            <div className="relative"><Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" /><input required type="tel" placeholder="WhatsApp Number" value={mobile} onChange={e => setMobile(e.target.value)} className={inputClass} /></div>
-            <div className="relative"><MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" /><input required type="text" placeholder="Postcode" value={postcode} onChange={e => setPostcode(e.target.value)} className={`${inputClass} uppercase`} /></div>
-          </div>
-        )}
-        <div className="relative"><Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" /><input required type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} className={inputClass} /></div>
-        <div className="relative"><Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" /><input required type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} className={inputClass} /></div>
 
-        <button type="submit" disabled={isSubmitting} className="w-full mt-4 flex justify-center items-center gap-2 rounded-xl bg-emerald-600 py-4 text-sm font-bold text-white hover:bg-emerald-700 active:scale-95 disabled:opacity-70">
-          {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : (authMode === 'login' ? "Log In" : "Create Profile")}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Mobile Number (WhatsApp)</label>
+              <div className="relative">
+                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                <input required type="tel" value={phone} onChange={handlePhoneChange} className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-gray-900" />
+              </div>
+            </div>
+          </>
+        )}
+
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Email Address</label>
+          <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-medium" />
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Password</label>
+          <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-medium" />
+        </div>
+
+        <button type="submit" disabled={loading} className="w-full bg-gray-900 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-800 transition-all shadow-lg active:scale-95 disabled:opacity-50 mt-6">
+          {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
+          {isLogin ? "Sign In" : "Create Account"}
         </button>
       </form>
+
+      <div className="mt-6 text-center">
+        <button onClick={() => { setIsLogin(!isLogin); setError(null); }} className="text-sm font-bold text-emerald-600 hover:text-emerald-700">
+          {isLogin ? "Need an account? Sign up" : "Already have an account? Log in"}
+        </button>
+      </div>
     </div>
   );
 }
