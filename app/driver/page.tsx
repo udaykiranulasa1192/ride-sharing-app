@@ -134,8 +134,13 @@ export default function DriverHomePage() {
     }]);
 
     if (error) {
-      console.error("Supabase Error:", error); // Added this so you can see errors in browser console
-      setErrorMsg("Failed to post ride: " + error.message);
+      console.error("Supabase Error:", error); 
+      // THE FIX: Use setErrorMsg instead of alert to trigger the beautiful UI box!
+      if (error.code === '23505') {
+        setErrorMsg("You already have an active ride posted for this date and shift!");
+      } else {
+        setErrorMsg("Failed to post ride: " + error.message);
+      }
       setIsSubmitting(false);
     } else {
       router.push('/driver/dashboard');
@@ -223,11 +228,18 @@ export default function DriverHomePage() {
               <input required type="number" min="1" max="6" value={seatsAvailable} onChange={(e) => setSeatsAvailable(e.target.value)} className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3 text-center text-gray-900 focus:border-emerald-500 outline-none font-black text-lg" />
             </div>
           </div>
+{/* Add this right above the Post Ride button */}
+          {errorMsg && (
+            <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-xl">
+              <p className="text-sm font-bold text-red-700">{errorMsg}</p>
+            </div>
+          )}
 
           <button type="submit" disabled={isSubmitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-4 text-lg font-bold text-white shadow-xl shadow-emerald-600/20 active:scale-[0.98] disabled:opacity-70">
             {isSubmitting ? <Loader2 className="h-6 w-6 animate-spin" /> : <ShieldCheck className="h-6 w-6" />}
             {isSubmitting ? "Publishing..." : "Post Ride"}
           </button>
+      
         </form>
       </main>
 

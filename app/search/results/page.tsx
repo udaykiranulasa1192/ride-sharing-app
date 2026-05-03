@@ -19,7 +19,8 @@ import { supabase } from "@/lib/supabase";
 function ResultsLogic() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  
+  // Add this inside ResultsLogic
+  const [requestedRideIds, setRequestedRideIds] = useState<Set<string>>(new Set());
   // Extract data passed from the Search funnel
   const from = searchParams.get("from") || "";
   const to = searchParams.get("to") || "";
@@ -32,12 +33,13 @@ function ResultsLogic() {
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
 
-  useEffect(() => {
+useEffect(() => {
     async function fetchRides() {
       const friendsList = friendsParam ? friendsParam.split(',') : [];
       const totalSeatsNeeded = 1 + friendsList.length;
 
-      const { data, error } = await supabase
+      // 1. Fetch available rides
+      const { data: ridesData, error } = await supabase
         .from('rides')
         .select('*')
         .eq('status', 'active')
@@ -46,7 +48,24 @@ function ResultsLogic() {
         .eq('departure_time', shift)
         .ilike('destination_hub', `%${to}%`);
 
-      if (!error && data) setRides(data);
+      if (!error && ridesData) setRides(ridesData);
+
+      // 2. Fetch user's existing requests (THE UI BOUNCER)
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: matches } = await supabase
+          .from('trip_matches')
+          .select('ride_id')
+          .eq('passenger_id', user.id)
+          .in('match_status', ['pending', 'confirmed']);
+        
+        if (matches) {
+          // THE FIX: Wrap m.ride_id in String() to prevent type mismatch
+          const requestedSet = new Set(matches.map((m: any) => String(m.ride_id)));
+          setRequestedRideIds(requestedSet);
+        }
+      }
+      
       setLoading(false);
     }
     
@@ -64,19 +83,23 @@ function ResultsLogic() {
   };
 
   // --- 1. THE BOOKING HANDSHAKE ---
+// --- 1. THE BOOKING HANDSHAKE (Optimistic UI Update) ---
+// --- 1. THE BOOKING HANDSHAKE (Optimistic UI Update) ---
   const handleBookSeat = async (rideId: string) => {
     setActionLoadingId(rideId);
     
-    // Check if user is logged in
+    // 1. Check if user is logged in
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-      router.push("/passenger/login"); // Or wherever your login is located
+      router.push("/passenger/login");
       return;
     }
 
+    // 2. Prep data
     const finalPickup = getUnifiedPickupString();
     const seatsNeeded = 1 + (friendsParam ? friendsParam.split(',').length : 0);
 
+    // 3. Send to database
     const { error } = await supabase.from('trip_matches').insert([{
       ride_id: rideId,
       passenger_id: user.id,
@@ -85,12 +108,15 @@ function ResultsLogic() {
       match_status: 'pending'
     }]);
 
+    // 4. THE FIX: Update UI only if the database accepted it!
     if (!error) {
-      router.push("/passenger/dashboard");
+      setRequestedRideIds(prev => new Set(prev).add(String(rideId)));
     } else {
       alert("Failed to book seat. Please try again.");
-      setActionLoadingId(null);
     }
+    
+    // 5. Turn off the loading spinner
+    setActionLoadingId(null);
   };
 
   // --- 2. THE BROADCAST HANDSHAKE (Jobs Board) ---
@@ -231,7 +257,16 @@ function ResultsLogic() {
                   </div>
                 </div>
 
-                {/* Action Button */}
+                {/* Action Button: Checks if they already requested this specific ride */}
+             {/* THE FIX: Wrap ride.id in String() right here 👇 */}
+              {requestedRideIds.has(String(ride.id)) ? (
+                <button 
+                  disabled
+                  className="w-full bg-emerald-50 text-emerald-700 border-2 border-emerald-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 cursor-not-allowed"
+                >
+                  <CheckCircle className="h-5 w-5" /> Request Sent
+                </button>
+              ) : (
                 <button 
                   onClick={() => handleBookSeat(ride.id)} 
                   disabled={actionLoadingId === ride.id}
@@ -239,6 +274,7 @@ function ResultsLogic() {
                 >
                   {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : "Request Seat"}
                 </button>
+              )}
               </div>
             </div>
           ))}
