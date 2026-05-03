@@ -2,172 +2,138 @@
 
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { Loader2, ArrowLeft, Car, Phone } from "lucide-react";
+import { Loader2, Phone, Mail, Lock, User, MapPin, ArrowLeft, Car } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-// 1. ADD THE INTERFACE
 interface PassengerAuthFormProps {
-  onSuccess?: () => void | Promise<void>; 
+  onSuccess: () => void;
 }
 
-// 2. APPLY IT TO THE COMPONENT SIGNATURE
 export default function PassengerAuthForm({ onSuccess }: PassengerAuthFormProps) {
   const router = useRouter();
-  const [isLogin, setIsLogin] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
 
   // Form State
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
-  const [phone, setPhone] = useState("+44"); // Locked Default
+  const [mobile, setMobile] = useState("");
+  const [postcode, setPostcode] = useState("");
 
-  // Strict UK Phone Formatter
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let val = e.target.value;
-    // Prevent user from deleting the +44 prefix
-    if (!val.startsWith("+44")) {
-      val = "+44";
-    }
-    // Only allow numbers after the prefix
-    const rawNumber = val.replace("+44", "").replace(/[^0-9]/g, "");
-    setPhone("+44" + rawNumber);
+    const value = e.target.value.replace(/\D/g, '').slice(0, 10);
+    setMobile(value);
+  };
+
+  const handlePostcodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let val = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (val.length > 7) val = val.slice(0, 7);
+    if (val.length > 3) val = val.slice(0, val.length - 3) + ' ' + val.slice(val.length - 3);
+    setPostcode(val);
   };
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    setError(null);
+    setIsSubmitting(true);
+    setErrorMsg("");
 
     try {
-      if (isLogin) {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
-        
-        // 3. USE THE PROP UPON SUCCESSFUL LOGIN
-        if (onSuccess) {
-          await onSuccess();
-        } else {
-          router.push("/passenger/dashboard");
+      if (authMode === 'signup') {
+        const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
+        if (authError) throw authError;
+
+        if (authData.user) {
+          const { error: profileError } = await supabase.from('passenger_profiles').insert([{
+            id: authData.user.id,
+            first_name: firstName.trim(),
+            last_name: lastName.trim(),
+            mobile_number: `+44${mobile}`,
+            postcode: postcode.toUpperCase()
+          }]);
+          if (profileError) throw profileError;
         }
       } else {
-        // Registration Flow
-        // Ensure phone number is a valid UK length (roughly 10 digits after +44)
-        if (phone.length < 12 || phone.length > 13) {
-          throw new Error("Please enter a valid UK mobile number.");
-        }
-
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              first_name: firstName,
-              last_name: lastName,
-              phone_number: phone,
-              role: 'passenger' // Explicitly tag them
-            }
-          }
-        });
-        if (error) throw error;
-        
-        alert("Registration successful! You can now log in.");
-        setIsLogin(true);
+        const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+        if (authError) throw authError;
       }
+      onSuccess();
     } catch (err: any) {
-      setError(err.message);
+      setErrorMsg(err.message || "An error occurred.");
     } finally {
-      setLoading(false);
+      setIsSubmitting(false);
     }
   };
 
+  const inputClass = "w-full rounded-xl border border-gray-200 bg-gray-50 py-3 pr-4 text-sm text-gray-900 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all placeholder:text-gray-400";
+
   return (
-    <div className="w-full max-w-md mx-auto p-6 bg-white rounded-3xl shadow-xl border border-gray-100">
-      
-      {/* HEADER: Navigation & Logo */}
-      <div className="flex items-center justify-between mb-8">
-        <button 
-          onClick={() => router.back()} 
-          className="p-2 -ml-2 rounded-full hover:bg-gray-100 text-gray-500 transition-colors"
-          aria-label="Go back"
-        >
+    <div className="bg-white rounded-[32px] border border-gray-100 shadow-2xl max-w-md mx-auto w-full relative overflow-hidden">
+      <div className="bg-gray-50/50 border-b border-gray-100 p-5 flex items-center justify-between">
+        <Link href="/" className="flex items-center gap-2">
+            <div className="h-8 w-8 rounded-lg bg-emerald-600 flex items-center justify-center shadow-md">
+                <Car className="h-5 w-5 text-white" />
+            </div>
+            <span className="text-lg font-black text-gray-900 tracking-tight">ShiftPool</span>
+        </Link>
+        <button onClick={() => router.back()} className="p-2 rounded-full hover:bg-gray-200 text-gray-400 transition-colors">
           <ArrowLeft className="h-5 w-5" />
         </button>
-        
-        <Link href="/" className="flex items-center gap-2 group">
-          <div className="bg-emerald-600 p-2 rounded-xl group-hover:bg-emerald-700 transition-colors">
-            <Car className="h-5 w-5 text-white" />
-          </div>
-          <span className="font-black text-xl tracking-tight text-gray-900 group-hover:text-emerald-700 transition-colors">ShiftPool</span>
-        </Link>
-        <div className="w-9" /> {/* Spacer for centering */}
       </div>
 
-      <div className="mb-6">
-        <h2 className="text-2xl font-black text-gray-900 tracking-tight">
-          {isLogin ? "Welcome back" : "Create passenger account"}
+      <div className="p-8">
+        <h2 className="text-2xl font-black text-gray-900 text-center mb-6">
+          {authMode === 'login' ? 'Welcome Back' : 'Join as Passenger'}
         </h2>
-        <p className="text-sm font-bold text-gray-400 mt-1">
-          {isLogin ? "Enter your details to find a ride." : "Join to start booking shifts."}
-        </p>
-      </div>
 
-      {error && (
-        <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-xl text-sm font-bold border border-red-100">
-          {error}
+        <div className="flex rounded-2xl bg-gray-100 p-1.5 mb-8">
+          <button onClick={() => setAuthMode('login')} className={`flex-1 py-2.5 text-xs font-black rounded-xl transition-all ${authMode === 'login' ? 'bg-white shadow-md text-emerald-600' : 'text-gray-400'}`}>LOG IN</button>
+          <button onClick={() => setAuthMode('signup')} className={`flex-1 py-2.5 text-xs font-black rounded-xl transition-all ${authMode === 'signup' ? 'bg-white shadow-md text-emerald-600' : 'text-gray-400'}`}>SIGN UP</button>
         </div>
-      )}
 
-      <form onSubmit={handleAuth} className="space-y-4">
-        {!isLogin && (
-          <>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">First Name</label>
-                <input required type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-medium" />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Last Name</label>
-                <input required type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-medium" />
-              </div>
-            </div>
+        {errorMsg && <div className="mb-6 p-4 bg-red-50 text-red-600 text-xs font-bold rounded-xl text-center border border-red-100">{errorMsg}</div>}
 
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Mobile Number (WhatsApp)</label>
+        <form onSubmit={handleAuth} className="space-y-4">
+          {authMode === 'signup' && (
+            <div className="space-y-4 animate-in fade-in zoom-in-95">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="relative">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-500" />
+                  <input required placeholder="First Name" value={firstName} onChange={e => setFirstName(e.target.value)} className={`${inputClass} pl-10`} />
+                </div>
+                <div className="relative">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-500" />
+                  <input required placeholder="Last Name" value={lastName} onChange={e => setLastName(e.target.value)} className={`${inputClass} pl-10`} />
+                </div>
+              </div>
+              <div className="relative flex items-center">
+                <Phone className="absolute left-3 h-5 w-5 text-emerald-500 z-10" />
+                <span className="absolute left-10 text-gray-400 font-bold z-10 pr-2 border-r border-gray-200">+44</span>
+                <input required type="tel" placeholder="7700..." value={mobile} onChange={handlePhoneChange} className={`${inputClass} pl-20`} />
+              </div>
               <div className="relative">
-                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-                <input required type="tel" value={phone} onChange={handlePhoneChange} className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-gray-900" />
+                <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-500" />
+                <input required placeholder="Postcode" value={postcode} onChange={handlePostcodeChange} className={`${inputClass} pl-10 uppercase font-bold`} />
               </div>
             </div>
-          </>
-        )}
+          )}
+          
+          <div className="relative">
+            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-500" />
+            <input required type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} className={`${inputClass} pl-10`} />
+          </div>
+          <div className="relative">
+            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-500" />
+            <input required type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} className={`${inputClass} pl-10`} />
+          </div>
 
-        <div className="space-y-1.5">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Email Address</label>
-          <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-medium" />
-        </div>
-
-        <div className="space-y-1.5">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Password</label>
-          <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:ring-2 focus:ring-emerald-500 outline-none font-medium" />
-        </div>
-
-        <button type="submit" disabled={loading} className="w-full bg-gray-900 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-800 transition-all shadow-lg active:scale-95 disabled:opacity-50 mt-6">
-          {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
-          {isLogin ? "Sign In" : "Create Account"}
-        </button>
-      </form>
-
-      <div className="mt-6 text-center">
-        <button onClick={() => { setIsLogin(!isLogin); setError(null); }} className="text-sm font-bold text-emerald-600 hover:text-emerald-700">
-          {isLogin ? "Need an account? Sign up" : "Already have an account? Log in"}
-        </button>
+          <button type="submit" disabled={isSubmitting} className="w-full mt-6 bg-emerald-600 text-white py-4 rounded-2xl font-black shadow-xl shadow-emerald-600/20 hover:bg-emerald-700 active:scale-95 transition-all flex justify-center items-center gap-2 disabled:opacity-50">
+            {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : (authMode === 'login' ? "LOG IN" : "CREATE ACCOUNT")}
+          </button>
+        </form>
       </div>
     </div>
   );

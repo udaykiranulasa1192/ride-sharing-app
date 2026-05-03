@@ -12,6 +12,7 @@ import {
   MapPin, 
   Calendar,
   CheckCircle,
+  XCircle,
   AlertCircle
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -83,8 +84,6 @@ useEffect(() => {
   };
 
   // --- 1. THE BOOKING HANDSHAKE ---
-// --- 1. THE BOOKING HANDSHAKE (Optimistic UI Update) ---
-// --- 1. THE BOOKING HANDSHAKE (Optimistic UI Update) ---
   const handleBookSeat = async (rideId: string) => {
     setActionLoadingId(rideId);
     
@@ -116,6 +115,34 @@ useEffect(() => {
     }
     
     // 5. Turn off the loading spinner
+    setActionLoadingId(null);
+  };
+  // --- 2. CANCEL A REQUEST FROM SEARCH PAGE ---
+  const handleCancelRequest = async (rideId: string) => {
+    setActionLoadingId(rideId); // Reusing the same loading state for the spinner!
+    
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    // We delete the request entirely so the "Database Bouncer" lets them re-request it later if they change their mind
+    const { error } = await supabase
+      .from('trip_matches')
+      .delete()
+      .eq('ride_id', rideId)
+      .eq('passenger_id', user.id)
+      .eq('match_status', 'pending'); // Only delete if it's still pending!
+
+    if (!error) {
+      // Optimistic UI Update: Instantly remove it from the Set to show the Green button again
+      setRequestedRideIds(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(String(rideId));
+        return newSet;
+      });
+    } else {
+      alert("Failed to cancel request. Please try again.");
+    }
+    
     setActionLoadingId(null);
   };
 
@@ -260,21 +287,33 @@ useEffect(() => {
                 {/* Action Button: Checks if they already requested this specific ride */}
              {/* THE FIX: Wrap ride.id in String() right here 👇 */}
               {requestedRideIds.has(String(ride.id)) ? (
-                <button 
-                  disabled
-                  className="w-full bg-emerald-50 text-emerald-700 border-2 border-emerald-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 cursor-not-allowed"
-                >
-                  <CheckCircle className="h-5 w-5" /> Request Sent
-                </button>
-              ) : (
-                <button 
-                  onClick={() => handleBookSeat(ride.id)} 
-                  disabled={actionLoadingId === ride.id}
-                  className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70 shadow-md shadow-emerald-600/20"
-                >
-                  {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : "Request Seat"}
-                </button>
-              )}
+  /* THE UPGRADE: Active Cancel Button instead of a disabled one */
+  <button 
+    onClick={() => handleCancelRequest(ride.id)}
+    disabled={actionLoadingId === ride.id}
+    className="w-full bg-red-50 text-red-600 border-2 border-red-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 hover:bg-red-100 transition-colors disabled:opacity-70 active:scale-[0.98] shadow-sm"
+  >
+    {actionLoadingId === ride.id ? (
+      <Loader2 className="h-5 w-5 animate-spin" />
+    ) : (
+      <XCircle className="h-5 w-5" />
+    )}
+    Cancel Request
+  </button>
+) : (
+  /* Standard Request Button */
+  <button 
+    onClick={() => handleBookSeat(ride.id)} 
+    disabled={actionLoadingId === ride.id}
+    className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70 shadow-md shadow-emerald-600/20"
+  >
+    {actionLoadingId === ride.id ? (
+      <Loader2 className="h-5 w-5 animate-spin" />
+    ) : (
+      "Request Seat"
+    )}
+  </button>
+)}
               </div>
             </div>
           ))}
