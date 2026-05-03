@@ -29,7 +29,7 @@ export default function DriverAuthForm({ onSuccess }: DriverAuthFormProps) {
 
   // Strict Phone Formatter
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value.replace(/\D/g, '').slice(0, 11);
+    const value = e.target.value.replace(/\D/g, '').slice(0, 10);
     setMobile(value);
   };
 

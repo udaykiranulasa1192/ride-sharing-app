@@ -110,9 +110,12 @@ export default function DriverHomePage() {
     const rideDate = dateSelection === 'today' ? new Date().toISOString().split('T')[0] : 
                      dateSelection === 'tomorrow' ? new Date(Date.now() + 86400000).toISOString().split('T')[0] : specificDate;
 
+ // Inside your handleSubmit function in app/driver/page.tsx
+
     const finalDep = shiftType === 'Custom' ? `${startRoll.h}:${startRoll.m} ${startRoll.p}` : shiftType.split(' - ')[0];
     const finalRet = tripType === 'round_trip' ? (shiftType === 'Custom' ? `${endRoll.h}:${endRoll.m} ${endRoll.p}` : shiftType.split(' - ')[1]) : null;
 
+    // THE FIX: Updated column names to match our new database exactly
     const { error } = await supabase.from('rides').insert([{
       driver_id: profile.id,
       driver_name: `${profile.first_name} ${profile.last_name}`,
@@ -125,12 +128,14 @@ export default function DriverHomePage() {
       trip_type: tripType,
       ride_date: rideDate,
       price: parseFloat(price),
-      seats_available: parseInt(seatsAvailable),
+      total_seats_capacity: parseInt(seatsAvailable), // NEW schema name
+      remaining_seats: parseInt(seatsAvailable),      // NEW schema name
       status: 'active'
     }]);
 
     if (error) {
-      setErrorMsg("Failed to post ride. Please check your connection.");
+      console.error("Supabase Error:", error); // Added this so you can see errors in browser console
+      setErrorMsg("Failed to post ride: " + error.message);
       setIsSubmitting(false);
     } else {
       router.push('/driver/dashboard');

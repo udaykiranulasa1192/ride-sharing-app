@@ -2,16 +2,14 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { 
   MapPin, 
   Navigation, 
-  Clock, 
   Search, 
   Car, 
   User,
   Calendar,
-  ShieldCheck,
-  CheckCircle,
   Users,
   Loader2,
   ArrowLeft,
@@ -42,10 +40,9 @@ interface FriendInput {
 }
 
 export default function SearchPage() {
+  const router = useRouter(); // Added router for redirection
   const [loading, setLoading] = React.useState(false);
-  const [hasSearched, setHasSearched] = React.useState(false);
-  const [rides, setRides] = React.useState<any[]>([]);
-  const [requestedIds, setRequestedIds] = React.useState<Set<string>>(new Set());
+  
   const dateInputRef = React.useRef<HTMLInputElement>(null);
   const [from, setFrom] = React.useState("");
   const [to, setTo] = React.useState("");
@@ -115,21 +112,20 @@ export default function SearchPage() {
     if (friends.some(f => f.postcode.length < 5)) return alert("Please complete all friend postcodes.");
 
     setLoading(true);
-    setHasSearched(true);
 
     const searchShift = shift === "Custom" ? `${customStart.h}:${customStart.m} ${customStart.p}` : shift.split(" - ")[0];
+    const validFriends = friends.filter(f => f.postcode.length > 4).map(f => f.postcode).join(',');
 
-    const { data, error } = await supabase
-      .from('rides')
-      .select('*')
-      .eq('status', 'active')
-      .gt('remaining_seats', 0)
-      .eq('ride_date', searchDate)
-      .eq('departure_time', searchShift)
-      .ilike('destination_hub', `%${to}%`);
+    // Build the URL parameters and navigate to the separate results page
+    const queryParams = new URLSearchParams({
+      from,
+      to,
+      date: searchDate,
+      shift: searchShift,
+      friends: validFriends
+    });
 
-    if (!error && data) setRides(data);
-    setLoading(false);
+    router.push(`/search/results?${queryParams.toString()}`);
   };
 
   const inputClass = "w-full rounded-xl border border-gray-200 bg-gray-50 py-3 text-gray-900 font-bold focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 placeholder:text-gray-400 placeholder:font-medium";
@@ -189,59 +185,52 @@ export default function SearchPage() {
 
           <div className="h-px w-full bg-gray-100" />
 
-          {/* ================= UPDATED DATE SELECTION ================= */}
           <div className="space-y-3">
-  <label className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Travel Date</label>
-  
-  {/* Row 1: Today / Tomorrow */}
-  <div className="flex gap-2">
-    <button 
-      type="button" 
-      onClick={() => setDateSelection('today')} 
-      className={`flex-1 py-3 rounded-xl font-black text-sm border-2 transition-all ${dateSelection === 'today' ? 'bg-emerald-600 border-emerald-600 text-white shadow-md shadow-emerald-600/20' : 'bg-white border-gray-100 text-gray-500 hover:border-emerald-200 hover:text-emerald-700'}`}
-    >
-      Today
-    </button>
-    <button 
-      type="button" 
-      onClick={() => setDateSelection('tomorrow')} 
-      className={`flex-1 py-3 rounded-xl font-black text-sm border-2 transition-all ${dateSelection === 'tomorrow' ? 'bg-emerald-600 border-emerald-600 text-white shadow-md shadow-emerald-600/20' : 'bg-white border-gray-100 text-gray-500 hover:border-emerald-200 hover:text-emerald-700'}`}
-    >
-      Tomorrow
-    </button>
-  </div>
-
-  {/* Row 2: Choose from Calendar */}
-  <div className="relative w-full">
-    <button
-      type="button"
-      onClick={() => dateInputRef.current?.showPicker()} // Manually triggers the native calendar
-      className={`w-full flex items-center justify-center gap-2 py-3.5 rounded-xl font-black text-sm border-2 transition-all ${dateSelection === 'custom' ? 'bg-emerald-600 border-emerald-600 text-white shadow-md shadow-emerald-600/20' : 'bg-white border-gray-100 text-gray-500 hover:border-emerald-200 hover:text-emerald-700'}`}
-    >
-      <Calendar className="h-5 w-5" />
-      <span>
-        {dateSelection === 'custom' && customDate 
-          ? new Date(customDate).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long' }) 
-          : 'Choose from calendar'}
-      </span>
-    </button>
-
-    {/* Hidden Native Input */}
-    <input 
-      ref={dateInputRef}
-      type="date" 
-      min={new Date().toISOString().split('T')[0]}
-      value={customDate}
-      onChange={(e) => {
-        if (e.target.value) {
-          setCustomDate(e.target.value);
-          setDateSelection('custom');
-        }
-      }}
-      className="absolute inset-0 w-full h-full opacity-0 pointer-events-none" 
-    />
-  </div>
-</div>
+            <label className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Travel Date</label>
+            <div className="flex gap-2">
+              <button 
+                type="button" 
+                onClick={() => setDateSelection('today')} 
+                className={`flex-1 py-3 rounded-xl font-black text-sm border-2 transition-all ${dateSelection === 'today' ? 'bg-emerald-600 border-emerald-600 text-white shadow-md shadow-emerald-600/20' : 'bg-white border-gray-100 text-gray-500 hover:border-emerald-200 hover:text-emerald-700'}`}
+              >
+                Today
+              </button>
+              <button 
+                type="button" 
+                onClick={() => setDateSelection('tomorrow')} 
+                className={`flex-1 py-3 rounded-xl font-black text-sm border-2 transition-all ${dateSelection === 'tomorrow' ? 'bg-emerald-600 border-emerald-600 text-white shadow-md shadow-emerald-600/20' : 'bg-white border-gray-100 text-gray-500 hover:border-emerald-200 hover:text-emerald-700'}`}
+              >
+                Tomorrow
+              </button>
+            </div>
+            <div className="relative w-full">
+              <button
+                type="button"
+                onClick={() => dateInputRef.current?.showPicker()}
+                className={`w-full flex items-center justify-center gap-2 py-3.5 rounded-xl font-black text-sm border-2 transition-all ${dateSelection === 'custom' ? 'bg-emerald-600 border-emerald-600 text-white shadow-md shadow-emerald-600/20' : 'bg-white border-gray-100 text-gray-500 hover:border-emerald-200 hover:text-emerald-700'}`}
+              >
+                <Calendar className="h-5 w-5" />
+                <span>
+                  {dateSelection === 'custom' && customDate 
+                    ? new Date(customDate).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long' }) 
+                    : 'Choose from calendar'}
+                </span>
+              </button>
+              <input 
+                ref={dateInputRef}
+                type="date" 
+                min={new Date().toISOString().split('T')[0]}
+                value={customDate}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setCustomDate(e.target.value);
+                    setDateSelection('custom');
+                  }
+                }}
+                className="absolute inset-0 w-full h-full opacity-0 pointer-events-none" 
+              />
+            </div>
+          </div>
 
           <div className="h-px w-full bg-gray-100" />
 
@@ -326,50 +315,6 @@ export default function SearchPage() {
           </button>
         </form>
 
-        {hasSearched && (
-          <div className="space-y-4 pt-4 border-t border-gray-200">
-            <h2 className="text-xs font-black text-emerald-600/60 uppercase tracking-widest ml-1">{rides.length} Drivers Found</h2>
-            {rides.length === 0 ? (
-              <div className="bg-white border-2 border-dashed border-emerald-100 rounded-3xl p-8 text-center shadow-sm">
-                <Car className="h-10 w-10 text-emerald-200 mx-auto mb-3" />
-                <p className="font-bold text-gray-900">No matches found</p>
-                <p className="text-xs font-medium text-gray-500 mt-1">Try adjusting your time or date.</p>
-              </div>
-            ) : (
-              rides.map((ride) => {
-                const isRequested = requestedIds.has(ride.id);
-                return (
-                  <div key={ride.id} className="bg-white rounded-2xl border-2 border-emerald-50 shadow-sm hover:border-emerald-400 hover:shadow-emerald-600/10 transition-all overflow-hidden">
-                    <div className="p-4">
-                      <div className="flex justify-between items-start mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className="h-12 w-12 bg-emerald-50 rounded-full flex items-center justify-center text-emerald-700 font-black text-lg border border-emerald-100">{ride.driver_name.charAt(0)}</div>
-                          <div>
-                            <p className="font-black text-gray-900 leading-none mb-1">{ride.driver_name}</p>
-                            <div className="flex items-center gap-1 text-[10px] font-bold text-gray-500 uppercase"><ShieldCheck className="h-3 w-3 text-emerald-500" /> Verified</div>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Seats</p>
-                          <p className="font-black text-emerald-600 text-lg leading-none">{ride.remaining_seats}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-2.5 border border-gray-100 mb-4">
-                        <Car className="h-4 w-4 text-emerald-600/50" />
-                        <p className="text-sm font-bold text-gray-700">{ride.vehicle}</p>
-                      </div>
-                      {isRequested ? (
-                        <button disabled className="w-full bg-emerald-50 text-emerald-700 border-2 border-emerald-200 py-3.5 rounded-xl font-black flex items-center justify-center gap-2"><CheckCircle className="h-5 w-5" /> Request Sent</button>
-                      ) : (
-                        <button onClick={() => { setRequestedIds(prev => new Set(prev).add(ride.id)); alert("Requested! MVP database insert bypassed for UI preview."); }} className="w-full bg-emerald-600 text-white py-3.5 rounded-xl font-black flex items-center justify-center hover:bg-emerald-700 shadow-md shadow-emerald-600/20 transition-colors active:scale-[0.98]">Request Seat</button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        )}
       </main>
 
       {showTimeModal && (
