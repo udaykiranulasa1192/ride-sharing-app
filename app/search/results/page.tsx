@@ -14,7 +14,8 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
-  X 
+  X,
+  Lock // Added Lock icon for the Shift Lock feature
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import PassengerAuthForm from "@/components/PassengerAuthForm";
@@ -22,7 +23,6 @@ import PassengerAuthForm from "@/components/PassengerAuthForm";
 function ResultsLogic() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [requestedRideIds, setRequestedRideIds] = useState<Set<string>>(new Set());
   
   const from = searchParams.get("from") || "";
   const to = searchParams.get("to") || "";
@@ -39,13 +39,18 @@ function ResultsLogic() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
 
-  // 1. Fetch Data
+  // --- THE UPGRADE: Smart Status Tracking & Shift Lock ---
+  // Instead of a simple Set, we map the ride ID to its exact status ('pending' or 'confirmed')
+  const [userRideStatuses, setUserRideStatuses] = useState<Record<string, string>>({});
+  // This locks the user out of booking multiple rides for the same shift
+  const [hasActiveShiftRequest, setHasActiveShiftRequest] = useState(false);
+
   const fetchRidesAndAuth = async () => {
     setLoading(true);
     const friendsList = friendsParam ? friendsParam.split(',') : [];
     const totalSeatsNeeded = 1 + friendsList.length;
 
-    // Fetch available rides (Anyone can see this now!)
+    // 1. Fetch available rides
     const { data: ridesData } = await supabase
       .from('rides')
       .select('*')
@@ -57,19 +62,35 @@ function ResultsLogic() {
 
     if (ridesData) setRides(ridesData);
 
-    // Fetch user's existing requests ONLY if they are logged in
+    // 2. Fetch user's existing requests safely
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
       setIsLoggedIn(true);
+      
+      // We do an inner join to only get requests for THIS EXACT date and shift
       const { data: matches } = await supabase
         .from('trip_matches')
-        .select('ride_id')
+        .select(`
+          ride_id,
+          match_status,
+          rides!inner(ride_date, departure_time)
+        `)
         .eq('passenger_id', user.id)
-        .in('match_status', ['pending', 'confirmed']);
+        .in('match_status', ['pending', 'confirmed'])
+        .eq('rides.ride_date', date)
+        .eq('rides.departure_time', shift);
       
-      if (matches) {
-        const requestedSet = new Set(matches.map((m: any) => String(m.ride_id)));
-        setRequestedRideIds(requestedSet);
+      if (matches && matches.length > 0) {
+        // Build the dictionary of exact statuses
+        const statusMap: Record<string, string> = {};
+        matches.forEach((m: any) => {
+          statusMap[String(m.ride_id)] = m.match_status;
+        });
+        setUserRideStatuses(statusMap);
+        setHasActiveShiftRequest(true); // Lock the shift!
+      } else {
+        setUserRideStatuses({});
+        setHasActiveShiftRequest(false); // Unlock the shift
       }
     } else {
       setIsLoggedIn(false);
@@ -91,7 +112,6 @@ function ResultsLogic() {
     return finalPickup;
   };
 
-  // --- 2. THE INTERCEPTOR FOR BOOKING ---
   const handleBookSeat = async (rideId: string) => {
     if (!isLoggedIn) {
       setShowLoginModal(true);
@@ -114,14 +134,15 @@ function ResultsLogic() {
     }]);
 
     if (!error) {
-      setRequestedRideIds(prev => new Set(prev).add(String(rideId)));
+      // Instantly update UI: Mark this ride as pending and Lock the shift!
+      setUserRideStatuses(prev => ({ ...prev, [String(rideId)]: 'pending' }));
+      setHasActiveShiftRequest(true);
     } else {
       alert("Failed to book seat. Please try again.");
     }
     setActionLoadingId(null);
   };
 
-  // --- 3. THE INTERCEPTOR FOR BROADCASTING ---
   const handleBroadcast = async () => {
     if (!isLoggedIn) {
       setShowLoginModal(true);
@@ -165,11 +186,13 @@ function ResultsLogic() {
       .eq('match_status', 'pending'); 
 
     if (!error) {
-      setRequestedRideIds(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(String(rideId));
-        return newSet;
+      // Instantly update UI: Remove the ride status and Unlock the shift!
+      setUserRideStatuses(prev => {
+        const next = { ...prev };
+        delete next[String(rideId)];
+        return next;
       });
+      setHasActiveShiftRequest(false);
     } else {
       alert("Failed to cancel request. Please try again.");
     }
@@ -235,11 +258,11 @@ function ResultsLogic() {
               </p>
               <button 
                 onClick={handleBroadcast} 
-                disabled={actionLoadingId === 'broadcast'}
-                className="w-full bg-emerald-600 text-white font-black py-4 rounded-xl shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 active:scale-95 disabled:opacity-70"
+                disabled={actionLoadingId === 'broadcast' || hasActiveShiftRequest}
+                className="w-full bg-emerald-600 text-white font-black py-4 rounded-xl shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 active:scale-95 disabled:opacity-50"
               >
                 {actionLoadingId === 'broadcast' ? <Loader2 className="h-5 w-5 animate-spin" /> : <Rss className="h-5 w-5" />}
-                Broadcast to Drivers
+                {hasActiveShiftRequest ? "Shift Already Booked" : "Broadcast to Drivers"}
               </button>
             </div>
           )}
@@ -250,66 +273,73 @@ function ResultsLogic() {
         <div className="space-y-4 pt-2">
           <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest px-1">{rides.length} Drivers Available</h3>
           
-          {rides.map((ride) => (
-            <div key={ride.id} className="bg-white rounded-[24px] border-2 border-emerald-50 shadow-sm hover:border-emerald-200 transition-all overflow-hidden animate-in slide-in-from-bottom-4">
-              <div className="p-5 space-y-4">
-                
-                {/* Driver Info Header */}
-                <div className="flex justify-between items-start">
-                  <div className="flex items-center gap-3">
-                    <div className="h-12 w-12 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-800 font-black text-xl border border-emerald-200">
-                      {ride.driver_name.charAt(0)}
-                    </div>
-                    <div>
-                      <h4 className="font-black text-gray-900 text-lg leading-none mb-1">{ride.driver_name}</h4>
-                      <p className="text-[10px] font-bold text-emerald-600 flex items-center gap-1 uppercase tracking-widest">
-                        <ShieldCheck className="h-3 w-3" /> Verified
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Price</p>
-                    <p className="font-black text-2xl text-gray-900 leading-none">£{ride.price.toFixed(2)}</p>
-                  </div>
-                </div>
-                
-                {/* Ride Details Card */}
-                <div className="bg-gray-50 rounded-2xl p-4 flex justify-between items-center border border-gray-100">
-                  <div className="flex items-center gap-2">
-                     <Car className="h-5 w-5 text-gray-400" />
-                     <div>
-                       <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-tight">Vehicle</p>
-                       <p className="font-black text-gray-700 text-sm leading-tight">{ride.vehicle}</p>
-                     </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-tight">Seats Left</p>
-                    <p className="font-black text-emerald-600 text-sm leading-tight">{ride.remaining_seats} / {ride.total_seats_capacity}</p>
-                  </div>
-                </div>
+          {rides.map((ride) => {
+            // --- THE UPGRADE: Dynamic UI Logic ---
+            const rideStatus = userRideStatuses[String(ride.id)];
+            // If they have an active request for this shift, but it's NOT this specific ride, lock it down!
+            const isLockedOut = hasActiveShiftRequest && !rideStatus;
 
-                {/* Action Button */}
-                {requestedRideIds.has(String(ride.id)) ? (
-                  <button 
-                    onClick={() => handleCancelRequest(ride.id)}
-                    disabled={actionLoadingId === ride.id}
-                    className="w-full bg-red-50 text-red-600 border-2 border-red-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 hover:bg-red-100 transition-colors disabled:opacity-70 active:scale-[0.98] shadow-sm"
-                  >
-                    {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <XCircle className="h-5 w-5" />}
-                    Cancel Request
-                  </button>
-                ) : (
-                  <button 
-                    onClick={() => handleBookSeat(ride.id)} 
-                    disabled={actionLoadingId === ride.id}
-                    className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70 shadow-md shadow-emerald-600/20"
-                  >
-                    {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : "Request Seat"}
-                  </button>
-                )}
+            return (
+              <div key={ride.id} className={`bg-white rounded-[24px] shadow-sm transition-all overflow-hidden animate-in slide-in-from-bottom-4 ${rideStatus === 'confirmed' ? 'border-2 border-emerald-500' : 'border-2 border-emerald-50 hover:border-emerald-200'}`}>
+                <div className="p-5 space-y-4">
+                  
+                  {/* Driver Info Header */}
+                  <div className="flex justify-between items-start">
+                    <div className="flex items-center gap-3">
+                      <div className="h-12 w-12 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-800 font-black text-xl border border-emerald-200">
+                        {ride.driver_name.charAt(0)}
+                      </div>
+                      <div>
+                        <h4 className="font-black text-gray-900 text-lg leading-none mb-1">{ride.driver_name}</h4>
+                        <p className="text-[10px] font-bold text-emerald-600 flex items-center gap-1 uppercase tracking-widest">
+                          <ShieldCheck className="h-3 w-3" /> Verified
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Price</p>
+                      <p className="font-black text-2xl text-gray-900 leading-none">£{ride.price.toFixed(2)}</p>
+                    </div>
+                  </div>
+                  
+                  {/* Ride Details Card */}
+                  <div className="bg-gray-50 rounded-2xl p-4 flex justify-between items-center border border-gray-100">
+                    <div className="flex items-center gap-2">
+                       <Car className="h-5 w-5 text-gray-400" />
+                       <div>
+                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-tight">Vehicle</p>
+                         <p className="font-black text-gray-700 text-sm leading-tight">{ride.vehicle}</p>
+                       </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-tight">Seats Left</p>
+                      <p className="font-black text-emerald-600 text-sm leading-tight">{ride.remaining_seats} / {ride.total_seats_capacity}</p>
+                    </div>
+                  </div>
+
+                  {/* --- THE UPGRADE: Contextual Action Buttons --- */}
+                  {rideStatus === 'confirmed' ? (
+                    <Link href="/passenger/dashboard" className="w-full bg-emerald-50 text-emerald-700 border-2 border-emerald-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 transition-colors shadow-sm">
+                      <CheckCircle className="h-5 w-5" /> Trip Confirmed!
+                    </Link>
+                  ) : rideStatus === 'pending' ? (
+                    <button onClick={() => handleCancelRequest(ride.id)} disabled={actionLoadingId === ride.id} className="w-full bg-red-50 text-red-600 border-2 border-red-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 hover:bg-red-100 transition-colors disabled:opacity-70 active:scale-[0.98] shadow-sm">
+                      {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <XCircle className="h-5 w-5" />} Cancel Request
+                    </button>
+                  ) : isLockedOut ? (
+                    <button disabled className="w-full bg-gray-100 text-gray-400 py-4 rounded-xl font-black flex items-center justify-center gap-2 transition-colors">
+                      <Lock className="h-5 w-5" /> Shift Already Booked
+                    </button>
+                  ) : (
+                    <button onClick={() => handleBookSeat(ride.id)} disabled={actionLoadingId === ride.id} className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70 shadow-md shadow-emerald-600/20">
+                      {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : "Request Seat"}
+                    </button>
+                  )}
+
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -317,15 +347,9 @@ function ResultsLogic() {
       {showLoginModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm px-4 animate-in fade-in">
           <div className="relative w-full max-w-md animate-in zoom-in-95 duration-300">
-            {/* Close Button */}
-            <button 
-              onClick={() => setShowLoginModal(false)}
-              className="absolute -top-12 right-0 bg-white/20 hover:bg-white/40 text-white p-2 rounded-full backdrop-blur-md transition-all z-50"
-            >
+            <button onClick={() => setShowLoginModal(false)} className="absolute -top-12 right-0 bg-white/20 hover:bg-white/40 text-white p-2 rounded-full backdrop-blur-md transition-all z-50">
               <X className="h-6 w-6" />
             </button>
-
-            {/* Premium Auth Form */}
             <PassengerAuthForm onSuccess={handleLoginSuccess} />
           </div>
         </div>
@@ -335,7 +359,6 @@ function ResultsLogic() {
   );
 }
 
-// THIS IS WHAT WAS MISSING! 
 export default function ResultsPage() {
   return (
     <div className="min-h-screen bg-gray-50 pb-24">
