@@ -1,421 +1,375 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
-import { 
-  MapPin, 
-  Clock, 
-  Users, 
-  Loader2, 
-  Car, 
-  AlertCircle, 
-  CheckCircle, 
-  XCircle, 
-  MessageCircle,
-  AlertTriangle
-} from "lucide-react";
+import { useEffect, useState, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import DriverNav from "@/components/DriverNav";
+import { 
+  Car, 
+  Loader2, 
+  ArrowLeft, 
+  ShieldCheck, 
+  Rss, 
+  MapPin, 
+  Calendar,
+  CheckCircle,
+  XCircle,
+  AlertCircle,
+  X,
+  Lock
+} from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import PassengerAuthForm from "@/components/PassengerAuthForm";
 
-export default function DriverDashboard() {
-  const [myRides, setMyRides] = useState<any[]>([]);
-  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
-  const [passengerProfiles, setPassengerProfiles] = useState<Record<string, any>>({});
+function ResultsLogic() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   
+  const from = searchParams.get("from") || "";
+  const to = searchParams.get("to") || "";
+  const date = searchParams.get("date") || "";
+  const shift = searchParams.get("shift") || "";
+  const friendsParam = searchParams.get("friends") || "";
+  
+  const [rides, setRides] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+  const [broadcastSuccess, setBroadcastSuccess] = useState(false);
 
-  const [cancelModalOpen, setCancelModalOpen] = useState(false);
-  const [rideToCancel, setRideToCancel] = useState<string | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+
+  // --- THE UPGRADE: Only lock the shift if a trip is actually CONFIRMED ---
+  const [userRideStatuses, setUserRideStatuses] = useState<Record<string, string>>({});
+  const [hasConfirmedShift, setHasConfirmedShift] = useState(false); // Changed from hasActiveShiftRequest
+
+  const fetchRidesAndAuth = async () => {
+    setLoading(true);
+    const friendsList = friendsParam ? friendsParam.split(',') : [];
+    const totalSeatsNeeded = 1 + friendsList.length;
+
+    // 1. Fetch available rides
+    const { data: ridesData } = await supabase
+      .from('rides')
+      .select('*')
+      .eq('status', 'active')
+      .gte('remaining_seats', totalSeatsNeeded)
+      .eq('ride_date', date)
+      .eq('departure_time', shift)
+      .ilike('destination_hub', `%${to}%`);
+
+    if (ridesData) setRides(ridesData);
+
+    // 2. Fetch user's existing requests
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      setIsLoggedIn(true);
+      
+      const { data: matches } = await supabase
+        .from('trip_matches')
+        .select(`
+          ride_id,
+          match_status,
+          rides!inner(ride_date, departure_time)
+        `)
+        .eq('passenger_id', user.id)
+        .in('match_status', ['pending', 'confirmed'])
+        .eq('rides.ride_date', date)
+        .eq('rides.departure_time', shift);
+      
+      if (matches && matches.length > 0) {
+        const statusMap: Record<string, string> = {};
+        let isConfirmed = false;
+        
+        matches.forEach((m: any) => {
+          statusMap[String(m.ride_id)] = m.match_status;
+          if (m.match_status === 'confirmed') isConfirmed = true; // Check if ANY are confirmed
+        });
+        
+        setUserRideStatuses(statusMap);
+        setHasConfirmedShift(isConfirmed); // Only lock if confirmed!
+      } else {
+        setUserRideStatuses({});
+        setHasConfirmedShift(false);
+      }
+    } else {
+      setIsLoggedIn(false);
+    }
+    
+    setLoading(false);
+  };
 
   useEffect(() => {
-    fetchDashboardData();
-  }, []);
+    if (to && date && shift) fetchRidesAndAuth();
+  }, [to, date, shift, friendsParam]);
 
-  async function fetchDashboardData() {
-    setLoading(true);
+  const getUnifiedPickupString = () => {
+    let finalPickup = from;
+    if (friendsParam) {
+      const formattedFriends = friendsParam.split(',').join(', ');
+      finalPickup += ` (+ ${formattedFriends})`;
+    }
+    return finalPickup;
+  };
+
+  const handleBookSeat = async (rideId: string) => {
+    if (!isLoggedIn) {
+      setShowLoginModal(true);
+      return;
+    }
+
+    setActionLoadingId(rideId);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // 1. Fetch active rides and their matches
-    const { data: ridesData } = await supabase
-      .from('rides')
-      .select(`
-        *,
-        trip_matches (
-          id,
-          pickup_postcode,
-          seats_needed,
-          match_status,
-          passenger_id
-        )
-      `)
-      .eq('driver_id', user.id)
-      .in('status', ['active', 'full'])
-      .order('ride_date', { ascending: true });
+    const finalPickup = getUnifiedPickupString();
+    const seatsNeeded = 1 + (friendsParam ? friendsParam.split(',').length : 0);
 
-    // 2. Fetch pending requests
-    const { data: requestsData } = await supabase
+    const { error } = await supabase.from('trip_matches').insert([{
+      ride_id: rideId,
+      passenger_id: user.id,
+      pickup_postcode: finalPickup,
+      seats_needed: seatsNeeded,
+      match_status: 'pending' // Just a request, no lock yet!
+    }]);
+
+    if (!error) {
+      // Instantly mark THIS ride as pending, but DO NOT lock the shift yet!
+      setUserRideStatuses(prev => ({ ...prev, [String(rideId)]: 'pending' }));
+    } else {
+      alert("Failed to book seat. Please try again.");
+    }
+    setActionLoadingId(null);
+  };
+
+  const handleBroadcast = async () => {
+    if (!isLoggedIn) {
+      setShowLoginModal(true);
+      return;
+    }
+
+    setActionLoadingId('broadcast');
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const finalPickup = getUnifiedPickupString();
+    const seatsNeeded = 1 + (friendsParam ? friendsParam.split(',').length : 0);
+
+    const { error } = await supabase.from('open_requests').insert([{
+      passenger_id: user.id,
+      pickup_postcode: finalPickup,
+      destination_hub: to,
+      ride_date: date,
+      shift_type: shift,
+      seats_needed: seatsNeeded
+    }]);
+
+    if (!error) {
+      setBroadcastSuccess(true);
+    } else {
+      alert("Failed to broadcast request.");
+    }
+    setActionLoadingId(null);
+  };
+
+  const handleCancelRequest = async (rideId: string) => {
+    setActionLoadingId(rideId); 
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { error } = await supabase
       .from('trip_matches')
-      .select(`
-        *,
-        rides!inner(driver_id, departure_time, destination_hub, ride_date)
-      `)
-      .eq('rides.driver_id', user.id)
-      .eq('match_status', 'pending');
+      .delete()
+      .eq('ride_id', rideId)
+      .eq('passenger_id', user.id)
+      .eq('match_status', 'pending'); 
 
-    // 3. Gather all passenger IDs and fetch their profiles manually
-    const passengerIds = new Set<string>();
-    
-    ridesData?.forEach(ride => {
-      ride.trip_matches?.forEach((match: any) => {
-        if (match.passenger_id) passengerIds.add(match.passenger_id);
+    if (!error) {
+      setUserRideStatuses(prev => {
+        const next = { ...prev };
+        delete next[String(rideId)];
+        return next;
       });
-    });
-    
-    requestsData?.forEach(req => {
-      if (req.passenger_id) passengerIds.add(req.passenger_id);
-    });
-
-    if (passengerIds.size > 0) {
-      const { data: profilesData } = await supabase
-        .from('passenger_profiles')
-        .select('id, first_name, last_name, mobile_number')
-        .in('id', Array.from(passengerIds));
-
-      const pMap: Record<string, any> = {};
-      profilesData?.forEach(p => { pMap[p.id] = p; });
-      setPassengerProfiles(pMap);
+    } else {
+      alert("Failed to cancel request. Please try again.");
     }
-
-    if (ridesData) setMyRides(ridesData);
-    if (requestsData) setPendingRequests(requestsData);
-    setLoading(false);
-  }
-
-  // --- THE UPGRADE: Auto-Cleanup Protocol + Ghost Check ---
-  const handleAccept = async (req: any) => {
-    setProcessingId(req.id);
-    
-    const requestId = req.id;
-    const rideId = req.ride_id;
-    const seatsNeeded = req.seats_needed;
-    const passengerId = req.passenger_id;
-    const rideDate = req.rides?.ride_date;
-    const departureTime = req.rides?.departure_time;
-
-    // --- STEP 0: THE GHOST CHECK ---
-    // Verify this request wasn't already deleted by another driver accepting!
-    const { data: checkReq, error: checkError } = await supabase
-      .from('trip_matches')
-      .select('match_status')
-      .eq('id', requestId)
-      .single();
-
-    // If it errors (because it was deleted) OR it's no longer pending, STOP!
-    if (checkError || !checkReq || checkReq.match_status !== 'pending') {
-      alert("Oops! This passenger was just accepted by another driver or cancelled their request.");
-      await fetchDashboardData(); // Refresh the screen to remove the ghost request
-      setProcessingId(null);
-      return; 
-    }
-
-    const { data: rideData } = await supabase.from('rides').select('remaining_seats').eq('id', rideId).single();
-    
-    if (rideData) {
-      const newSeats = rideData.remaining_seats - seatsNeeded;
-      
-      // --- STEP 1: Confirm match & deduct seats ---
-      await supabase.from('rides').update({ remaining_seats: newSeats }).eq('id', rideId);
-      await supabase.from('trip_matches').update({ match_status: 'confirmed' }).eq('id', requestId);
-      
-      // --- STEP 2: Auto-Cleanup Broadcasts ---
-      if (passengerId && rideDate) {
-        await supabase
-          .from('open_requests')
-          .delete()
-          .eq('passenger_id', passengerId)
-          .eq('ride_date', rideDate);
-      }
-
-      // --- STEP 3: Auto-Cleanup Other Pending Requests ---
-      if (passengerId && rideDate && departureTime) {
-        const { data: otherPendingRequests } = await supabase
-          .from('trip_matches')
-          .select('id, rides!inner(ride_date, departure_time)')
-          .eq('passenger_id', passengerId)
-          .eq('match_status', 'pending')
-          .eq('rides.ride_date', rideDate)
-          .eq('rides.departure_time', departureTime);
-
-        if (otherPendingRequests && otherPendingRequests.length > 0) {
-          const idsToDelete = otherPendingRequests.map(pReq => pReq.id);
-          await supabase
-            .from('trip_matches')
-            .delete()
-            .in('id', idsToDelete);
-        }
-      }
-
-      // --- STEP 4: Refresh Data ---
-      await fetchDashboardData();
-    }
-    
-    setProcessingId(null);
+    setActionLoadingId(null);
   };
 
-  const handleDecline = async (requestId: string) => {
-    setProcessingId(requestId);
-    await supabase.from('trip_matches').update({ match_status: 'declined' }).eq('id', requestId);
-    await fetchDashboardData();
-    setProcessingId(null);
+  const handleLoginSuccess = async () => {
+    setShowLoginModal(false);
+    await fetchRidesAndAuth(); 
   };
 
-  const triggerCancelWarning = (rideId: string) => {
-    setRideToCancel(rideId);
-    setCancelModalOpen(true);
-  };
-
-  const confirmCancelTrip = async () => {
-    if (!rideToCancel) return;
-    setProcessingId(rideToCancel);
-    
-    await supabase.from('rides').update({ status: 'cancelled' }).eq('id', rideToCancel);
-    await supabase.from('trip_matches').update({ match_status: 'cancelled' }).eq('ride_id', rideToCancel);
-    
-    await fetchDashboardData();
-    
-    setProcessingId(null);
-    setCancelModalOpen(false);
-    setRideToCancel(null);
-  };
-
-  const formatShiftTime = (ride: any) => {
-    if (ride.trip_type === "round_trip" && ride.return_time) {
-      return `${ride.departure_time} to ${ride.return_time}`;
-    }
-    if (ride.shift_type && ride.shift_type.includes("-")) {
-      return ride.shift_type.replace("-", "to");
-    }
-    return ride.departure_time;
-  };
-
-  if (loading) return (
-    <div className="flex h-screen items-center justify-center bg-gray-50">
-      <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-    </div>
-  );
+  const displayDate = date ? new Date(date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-24">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-40 shadow-sm">
-        <div className="max-w-md mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link href="/" className="h-10 w-10 rounded-xl bg-emerald-600 flex items-center justify-center shadow-sm">
-              <Car className="h-5 w-5 text-white" />
-            </Link>
-            <div className="flex flex-col">
-              <span className="text-lg font-black text-gray-900 tracking-tight leading-none">ShiftPool</span>
-              <h1 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-1">Driver Console</h1>
-            </div>
-          </div>
-          <Link href="/driver" className="text-xs font-bold bg-emerald-600 text-white px-4 py-2 rounded-xl hover:bg-emerald-700 shadow-md shadow-emerald-600/20">
-            Post Ride
-          </Link>
+    <div className="space-y-6 animate-in fade-in">
+      
+      {/* Route Summary Banner */}
+      <div className="bg-emerald-600 rounded-[24px] p-5 text-white shadow-md shadow-emerald-600/20 relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-4 opacity-10">
+          <MapPin className="h-24 w-24" />
         </div>
-      </header>
+        <div className="relative z-10 space-y-1">
+          <p className="text-[10px] font-bold text-emerald-200 uppercase tracking-widest">Searching Route</p>
+          <h2 className="text-2xl font-black uppercase tracking-tight leading-none mb-2">{to}</h2>
+          <div className="flex items-center gap-3 text-sm font-bold text-emerald-100">
+            <span className="flex items-center gap-1"><Calendar className="h-4 w-4" /> {displayDate}</span>
+            <span>•</span>
+            <span>{shift}</span>
+          </div>
+        </div>
+      </div>
 
-      <main className="max-w-md mx-auto px-4 py-6 space-y-8">
+      {loading ? (
+        <div className="py-20 flex flex-col items-center justify-center space-y-4">
+          <Loader2 className="h-10 w-10 animate-spin text-emerald-600" />
+          <p className="text-sm font-bold text-gray-400 animate-pulse">Scanning driver routes...</p>
+        </div>
+      ) : rides.length === 0 ? (
         
-        {/* --- PENDING REQUESTS --- */}
-        {pendingRequests.length > 0 && (
-          <section className="space-y-4">
-            <h2 className="text-xs font-black text-emerald-600 uppercase tracking-widest px-1 flex items-center gap-2">
-              <Clock className="h-3 w-3" /> New Ride Requests
-            </h2>
-            {pendingRequests.map((req) => {
-              const passenger = passengerProfiles[req.passenger_id] || { first_name: 'Unknown', last_name: 'User' };
-
-              return (
-                <div key={req.id} className="bg-white rounded-3xl border-2 border-emerald-100 p-5 shadow-lg shadow-emerald-600/5 animate-in slide-in-from-top-2">
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className="h-12 w-12 bg-emerald-50 rounded-full flex items-center justify-center text-emerald-700 font-black text-lg border border-emerald-100">
-                        {passenger.first_name.charAt(0)}
-                      </div>
-                      <div>
-                        <p className="font-black text-gray-900 text-lg leading-none">
-                          {passenger.first_name} {passenger.last_name}
-                        </p>
-                        <p className="text-[10px] font-bold text-gray-500 uppercase mt-1">
-                          Going to {req.rides?.destination_hub}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-100 flex items-center gap-1.5">
-                      <Users className="h-3.5 w-3.5 text-emerald-600" />
-                      <span className="font-black text-emerald-700 text-sm">{req.seats_needed}</span>
-                    </div>
-                  </div>
-
-                  <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 mb-5">
-                     <div className="flex items-center gap-3">
-                        <MapPin className="h-5 w-5 text-emerald-600" />
-                        <div>
-                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Pickup Postcode</p>
-                          <p className="font-black text-gray-900 text-lg tracking-widest uppercase">{req.pickup_postcode}</p>
-                        </div>
-                     </div>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => handleAccept(req)}
-                      disabled={!!processingId}
-                      className="flex-[2] bg-emerald-600 text-white py-4 rounded-xl font-black text-sm flex items-center justify-center gap-2 hover:bg-emerald-700 shadow-md shadow-emerald-600/20 active:scale-95 transition-all disabled:opacity-50"
-                    >
-                      {processingId === req.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle className="h-5 w-5" />}
-                      Accept Passenger
-                    </button>
-                    <button 
-                      onClick={() => handleDecline(req.id)}
-                      disabled={!!processingId}
-                      className="flex-1 bg-white border-2 border-gray-100 text-gray-400 py-4 rounded-xl font-black text-sm hover:text-red-500 hover:border-red-100 transition-all disabled:opacity-50"
-                    >
-                      Decline
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </section>
-        )}
-
-        {/* --- ACTIVE ROUTES --- */}
-        <section className="space-y-4">
-          <h2 className="text-xs font-black text-gray-400 uppercase tracking-widest px-1">My Active Routes</h2>
-          {myRides.length === 0 ? (
-            <div className="bg-white border-2 border-dashed border-gray-200 rounded-3xl p-10 text-center">
-              <Car className="h-12 w-12 text-gray-200 mx-auto mb-3" />
-              <p className="font-bold text-gray-400">No active shifts scheduled.</p>
+        <div className="bg-white rounded-[24px] border border-gray-200 p-8 text-center shadow-sm">
+          {broadcastSuccess ? (
+            <div className="animate-in zoom-in slide-in-from-bottom-4">
+              <div className="mx-auto h-20 w-20 bg-emerald-50 rounded-full flex items-center justify-center mb-5 border border-emerald-100">
+                <CheckCircle className="h-10 w-10 text-emerald-500" />
+              </div>
+              <h3 className="font-black text-gray-900 text-2xl mb-2 tracking-tight">Broadcast Sent!</h3>
+              <p className="text-gray-500 text-sm mb-8 leading-relaxed">
+                Your request has been beamed to our driver network. We will notify you the moment a driver accepts your trip.
+              </p>
+              <Link href="/passenger/dashboard" className="w-full block bg-gray-900 text-white font-black py-4 rounded-xl shadow-md hover:bg-gray-800 transition-colors">
+                Track on Dashboard
+              </Link>
             </div>
           ) : (
-            myRides.map((ride) => {
-              const confirmedMatches = ride.trip_matches?.filter((m: any) => m.match_status === 'confirmed') || [];
-
-              return (
-                <div key={ride.id} className="bg-white rounded-[32px] border border-gray-200 shadow-sm overflow-hidden mb-6">
-                  <div className={`px-6 py-4 flex justify-between items-center ${ride.status === 'full' ? 'bg-orange-50' : 'bg-emerald-50'}`}>
-                    <span className={`text-[10px] font-black uppercase tracking-widest ${ride.status === 'full' ? 'text-orange-700' : 'text-emerald-700'}`}>
-                      {ride.status === 'full' ? 'Full Capacity' : `${ride.remaining_seats} Seats Available`}
-                    </span>
-                    <span className="text-sm font-black text-gray-900">{new Date(ride.ride_date).toLocaleDateString('en-GB')}</span>
-                  </div>
-
-                  <div className="p-6 space-y-6">
-                    <div className="flex justify-between items-end">
-                      <div>
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Destination</p>
-                        <p className="text-2xl font-black text-gray-900">{ride.destination_hub}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Shift Time</p>
-                        <p className="text-lg font-black text-emerald-600">{formatShiftTime(ride)}</p>
-                      </div>
-                    </div>
-
-                    {/* CONFIRMED PASSENGERS MANIFEST */}
-                    <div className="space-y-3">
-                      <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                        <Users className="h-3 w-3" /> Confirmed Passengers
-                      </h4>
-                      
-                      {confirmedMatches.length === 0 ? (
-                        <p className="text-sm font-bold text-gray-300 italic py-2">Waiting for passengers to join...</p>
-                      ) : (
-                        <div className="space-y-2">
-                          {confirmedMatches.map((match: any, idx: number) => {
-                            const passenger = passengerProfiles[match.passenger_id] || {};
-                            const phone = passenger.mobile_number?.replace('+', '') || "";
-                            const waLink = `https://wa.me/${phone}?text=Hi! I am your ShiftPool driver for the ${ride.departure_time} shift to ${ride.destination_hub}.`;
-
-                            return (
-                              <div key={idx} className="flex items-center justify-between bg-gray-50 p-4 rounded-2xl border border-gray-100">
-                                <div className="flex items-center gap-3">
-                                  <div className="h-8 w-8 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs font-black">
-                                    {idx + 1}
-                                  </div>
-                                  <div>
-                                    <p className="font-black text-gray-900 uppercase text-sm tracking-widest">{match.pickup_postcode}</p>
-                                    <p className="text-[10px] font-bold text-emerald-600">{passenger.first_name} {passenger.last_name} • {match.seats_needed} Seat(s)</p>
-                                  </div>
-                                </div>
-                                {phone && (
-                                  <a 
-                                    href={waLink} 
-                                    target="_blank" 
-                                    rel="noreferrer"
-                                    className="h-10 w-10 bg-[#25D366] text-white rounded-xl flex items-center justify-center shadow-md hover:scale-110 transition-transform active:scale-95"
-                                  >
-                                    <MessageCircle className="h-5 w-5" />
-                                  </a>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    <button 
-                      onClick={() => triggerCancelWarning(ride.id)}
-                      disabled={processingId === ride.id}
-                      className="w-full py-4 rounded-2xl border-2 border-red-50 text-red-600 font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-red-50 transition-colors mt-2 disabled:opacity-50"
-                    >
-                      {processingId === ride.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
-                      Cancel Trip
-                    </button>
-                  </div>
-                </div>
-              );
-            })
+            <div className="animate-in fade-in">
+              <div className="mx-auto h-20 w-20 bg-gray-50 rounded-full flex items-center justify-center mb-5 border border-gray-100">
+                <AlertCircle className="h-10 w-10 text-gray-300" />
+              </div>
+              <h3 className="font-black text-gray-900 text-2xl mb-2 tracking-tight">No Matches Yet</h3>
+              <p className="text-gray-500 text-sm mb-8 leading-relaxed">
+                There are no drivers scheduled for this exact route and time. Broadcast your request to alert drivers of the available job.
+              </p>
+              <button 
+                onClick={handleBroadcast} 
+                disabled={actionLoadingId === 'broadcast' || hasConfirmedShift}
+                className="w-full bg-emerald-600 text-white font-black py-4 rounded-xl shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 active:scale-95 disabled:opacity-50"
+              >
+                {actionLoadingId === 'broadcast' ? <Loader2 className="h-5 w-5 animate-spin" /> : <Rss className="h-5 w-5" />}
+                {hasConfirmedShift ? "Shift Already Booked" : "Broadcast to Drivers"}
+              </button>
+            </div>
           )}
-        </section>
-      </main>
+        </div>
+      ) : (
+        
+        <div className="space-y-4 pt-2">
+          <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest px-1">{rides.length} Drivers Available</h3>
+          
+          {rides.map((ride) => {
+            const rideStatus = userRideStatuses[String(ride.id)];
+            
+            // --- THE UPGRADE: Only lock other cards if a driver CONFIRMED a ride ---
+            const isLockedOut = hasConfirmedShift && rideStatus !== 'confirmed';
 
-      {/* --- BEAUTIFUL CANCEL CONFIRMATION MODAL --- */}
-      {cancelModalOpen && (
+            return (
+              <div key={ride.id} className={`bg-white rounded-[24px] shadow-sm transition-all overflow-hidden animate-in slide-in-from-bottom-4 ${rideStatus === 'confirmed' ? 'border-2 border-emerald-500' : 'border-2 border-emerald-50 hover:border-emerald-200'}`}>
+                <div className="p-5 space-y-4">
+                  
+                  <div className="flex justify-between items-start">
+                    <div className="flex items-center gap-3">
+                      <div className="h-12 w-12 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-800 font-black text-xl border border-emerald-200">
+                        {ride.driver_name.charAt(0)}
+                      </div>
+                      <div>
+                        <h4 className="font-black text-gray-900 text-lg leading-none mb-1">{ride.driver_name}</h4>
+                        <p className="text-[10px] font-bold text-emerald-600 flex items-center gap-1 uppercase tracking-widest">
+                          <ShieldCheck className="h-3 w-3" /> Verified
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Price</p>
+                      <p className="font-black text-2xl text-gray-900 leading-none">£{ride.price.toFixed(2)}</p>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-gray-50 rounded-2xl p-4 flex justify-between items-center border border-gray-100">
+                    <div className="flex items-center gap-2">
+                       <Car className="h-5 w-5 text-gray-400" />
+                       <div>
+                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-tight">Vehicle</p>
+                         <p className="font-black text-gray-700 text-sm leading-tight">{ride.vehicle}</p>
+                       </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-tight">Seats Left</p>
+                      <p className="font-black text-emerald-600 text-sm leading-tight">{ride.remaining_seats} / {ride.total_seats_capacity}</p>
+                    </div>
+                  </div>
+
+                  {/* Contextual Action Buttons */}
+                  {rideStatus === 'confirmed' ? (
+                    <Link href="/passenger/dashboard" className="w-full bg-emerald-50 text-emerald-700 border-2 border-emerald-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 transition-colors shadow-sm">
+                      <CheckCircle className="h-5 w-5" /> Trip Confirmed!
+                    </Link>
+                  ) : rideStatus === 'pending' ? (
+                    <button onClick={() => handleCancelRequest(ride.id)} disabled={actionLoadingId === ride.id} className="w-full bg-red-50 text-red-600 border-2 border-red-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 hover:bg-red-100 transition-colors disabled:opacity-70 active:scale-[0.98] shadow-sm">
+                      {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <XCircle className="h-5 w-5" />} Cancel Request
+                    </button>
+                  ) : isLockedOut ? (
+                    <button disabled className="w-full bg-gray-100 text-gray-400 py-4 rounded-xl font-black flex items-center justify-center gap-2 transition-colors">
+                      <Lock className="h-5 w-5" /> Shift Already Booked
+                    </button>
+                  ) : (
+                    <button onClick={() => handleBookSeat(ride.id)} disabled={actionLoadingId === ride.id} className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70 shadow-md shadow-emerald-600/20">
+                      {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : "Request Seat"}
+                    </button>
+                  )}
+
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showLoginModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm px-4 animate-in fade-in">
-          <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-in zoom-in-95">
-            <div className="mx-auto h-16 w-16 bg-red-50 rounded-full flex items-center justify-center mb-4 border border-red-100">
-              <AlertTriangle className="h-8 w-8 text-red-500" />
-            </div>
-            
-            <h3 className="text-xl font-black text-center text-gray-900 mb-2 tracking-tight">Cancel this trip?</h3>
-            <p className="text-sm text-center text-gray-500 mb-6 leading-relaxed">
-              This will remove the route from the search and automatically notify any passengers who have requested a seat.
-            </p>
-            
-            <div className="flex gap-3">
-              <button 
-                onClick={() => setCancelModalOpen(false)}
-                className="flex-1 py-4 font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
-              >
-                Nevermind
-              </button>
-              <button 
-                onClick={confirmCancelTrip}
-                disabled={!!processingId}
-                className="flex-1 py-4 font-black text-white bg-red-500 hover:bg-red-600 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-red-500/20 transition-all disabled:opacity-50"
-              >
-                {processingId === rideToCancel ? <Loader2 className="h-4 w-4 animate-spin" /> : "Yes, Cancel"}
-              </button>
-            </div>
+          <div className="relative w-full max-w-md animate-in zoom-in-95 duration-300">
+            <button onClick={() => setShowLoginModal(false)} className="absolute -top-12 right-0 bg-white/20 hover:bg-white/40 text-white p-2 rounded-full backdrop-blur-md transition-all z-50">
+              <X className="h-6 w-6" />
+            </button>
+            <PassengerAuthForm onSuccess={handleLoginSuccess} />
           </div>
         </div>
       )}
 
-      <DriverNav />
+    </div>
+  );
+}
+
+export default function ResultsPage() {
+  return (
+    <div className="min-h-screen bg-gray-50 pb-24">
+      <header className="bg-gray-50/90 backdrop-blur sticky top-0 z-40 px-4 py-3 flex items-center gap-3">
+        <Link href="/search" className="p-2 -ml-2 rounded-full hover:bg-gray-200 text-gray-600 transition-colors">
+          <ArrowLeft className="h-5 w-5" />
+        </Link>
+        <h1 className="text-lg font-black text-gray-900 tracking-tight">Available Routes</h1>
+      </header>
+
+      <main className="max-w-md mx-auto p-4 pt-2">
+        <Suspense fallback={
+          <div className="py-20 flex flex-col items-center justify-center space-y-4">
+            <Loader2 className="h-10 w-10 animate-spin text-emerald-600" />
+            <p className="text-sm font-bold text-gray-400 animate-pulse">Loading connection...</p>
+          </div>
+        }>
+          <ResultsLogic />
+        </Suspense>
+      </main>
     </div>
   );
 }

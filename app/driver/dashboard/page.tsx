@@ -25,7 +25,6 @@ export default function DriverDashboard() {
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState<string | null>(null);
 
-  // --- CUSTOM MODAL STATE ---
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [rideToCancel, setRideToCancel] = useState<string | null>(null);
 
@@ -65,7 +64,7 @@ export default function DriverDashboard() {
       .eq('rides.driver_id', user.id)
       .eq('match_status', 'pending');
 
-    // 3. THE BULLETPROOF FIX: Gather all passenger IDs and fetch their profiles manually
+    // 3. Gather all passenger IDs and fetch their profiles manually
     const passengerIds = new Set<string>();
     
     ridesData?.forEach(ride => {
@@ -94,7 +93,7 @@ export default function DriverDashboard() {
     setLoading(false);
   }
 
-  // --- THE UPGRADE: Auto-Cleanup Protocol ---
+  // --- THE UPGRADE: Auto-Cleanup Protocol + Ghost Check ---
   const handleAccept = async (req: any) => {
     setProcessingId(req.id);
     
@@ -104,6 +103,22 @@ export default function DriverDashboard() {
     const passengerId = req.passenger_id;
     const rideDate = req.rides?.ride_date;
     const departureTime = req.rides?.departure_time;
+
+    // --- STEP 0: THE GHOST CHECK ---
+    // Verify this request wasn't already deleted by another driver accepting!
+    const { data: checkReq, error: checkError } = await supabase
+      .from('trip_matches')
+      .select('match_status')
+      .eq('id', requestId)
+      .single();
+
+    // If it errors (because it was deleted) OR it's no longer pending, STOP!
+    if (checkError || !checkReq || checkReq.match_status !== 'pending') {
+      alert("Oops! This passenger was just accepted by another driver or cancelled their request.");
+      await fetchDashboardData(); // Refresh the screen to remove the ghost request
+      setProcessingId(null);
+      return; 
+    }
 
     const { data: rideData } = await supabase.from('rides').select('remaining_seats').eq('id', rideId).single();
     
@@ -254,7 +269,6 @@ export default function DriverDashboard() {
                   </div>
 
                   <div className="flex gap-2">
-                    {/* THE UPGRADE: We pass the whole 'req' object now */}
                     <button 
                       onClick={() => handleAccept(req)}
                       disabled={!!processingId}
