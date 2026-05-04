@@ -12,7 +12,8 @@ import {
   CheckCircle, 
   XCircle, 
   MessageCircle,
-  AlertTriangle
+  AlertTriangle,
+  X // Added the X icon for the toast
 } from "lucide-react";
 import Link from "next/link";
 import DriverNav from "@/components/DriverNav";
@@ -27,6 +28,19 @@ export default function DriverDashboard() {
 
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [rideToCancel, setRideToCancel] = useState<string | null>(null);
+
+  // --- THE UPGRADE: Toast Notification State ---
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // --- THE UPGRADE: Auto-Dismiss Timer for Toast ---
+  useEffect(() => {
+    if (errorMessage) {
+      const timer = setTimeout(() => {
+        setErrorMessage(null);
+      }, 3000); // 3 seconds!
+      return () => clearTimeout(timer); // Cleanup if they click it away early
+    }
+  }, [errorMessage]);
 
   useEffect(() => {
     fetchDashboardData();
@@ -93,7 +107,6 @@ export default function DriverDashboard() {
     setLoading(false);
   }
 
-  // --- THE UPGRADE: Auto-Cleanup Protocol + Ghost Check ---
   const handleAccept = async (req: any) => {
     setProcessingId(req.id);
     
@@ -105,17 +118,17 @@ export default function DriverDashboard() {
     const departureTime = req.rides?.departure_time;
 
     // --- STEP 0: THE GHOST CHECK ---
-    // Verify this request wasn't already deleted by another driver accepting!
     const { data: checkReq, error: checkError } = await supabase
       .from('trip_matches')
       .select('match_status')
       .eq('id', requestId)
       .single();
 
-    // If it errors (because it was deleted) OR it's no longer pending, STOP!
+    // If the request was grabbed by someone else...
     if (checkError || !checkReq || checkReq.match_status !== 'pending') {
-      alert("Oops! This passenger was just accepted by another driver or cancelled their request.");
-      await fetchDashboardData(); // Refresh the screen to remove the ghost request
+      // Trigger our sleek custom toast instead of the ugly alert!
+      setErrorMessage("Oops! Another driver just accepted this passenger.");
+      await fetchDashboardData(); 
       setProcessingId(null);
       return; 
     }
@@ -207,7 +220,26 @@ export default function DriverDashboard() {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-24">
+    <div className="min-h-screen bg-gray-50 pb-24 relative">
+      
+      {/* --- THE UPGRADE: Sleek Error Toast --- */}
+      {errorMessage && (
+        <div className="fixed top-4 left-0 right-0 z-[200] flex justify-center px-4 pointer-events-none">
+          <div className="pointer-events-auto bg-gray-900 text-white rounded-2xl p-4 shadow-2xl flex items-center gap-3 w-full max-w-md animate-in slide-in-from-top-4 fade-in duration-300">
+            <div className="bg-red-500/20 p-2 rounded-full">
+              <AlertCircle className="h-5 w-5 text-red-400" />
+            </div>
+            <p className="flex-1 text-sm font-bold leading-snug">{errorMessage}</p>
+            <button 
+              onClick={() => setErrorMessage(null)} 
+              className="text-gray-400 hover:text-white transition-colors p-1"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40 shadow-sm">
         <div className="max-w-md mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -383,7 +415,7 @@ export default function DriverDashboard() {
         </section>
       </main>
 
-      {/* --- BEAUTIFUL CANCEL CONFIRMATION MODAL --- */}
+      {/* --- CANCEL CONFIRMATION MODAL --- */}
       {cancelModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm px-4 animate-in fade-in">
           <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-in zoom-in-95">
