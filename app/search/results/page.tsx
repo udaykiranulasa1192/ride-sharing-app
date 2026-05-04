@@ -15,7 +15,7 @@ import {
   XCircle,
   AlertCircle,
   X,
-  Lock // Added Lock icon for the Shift Lock feature
+  Lock
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import PassengerAuthForm from "@/components/PassengerAuthForm";
@@ -35,15 +35,12 @@ function ResultsLogic() {
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
 
-  // --- Auth & Modal State ---
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
 
-  // --- THE UPGRADE: Smart Status Tracking & Shift Lock ---
-  // Instead of a simple Set, we map the ride ID to its exact status ('pending' or 'confirmed')
+  // --- THE UPGRADE: Only lock the shift if a trip is actually CONFIRMED ---
   const [userRideStatuses, setUserRideStatuses] = useState<Record<string, string>>({});
-  // This locks the user out of booking multiple rides for the same shift
-  const [hasActiveShiftRequest, setHasActiveShiftRequest] = useState(false);
+  const [hasConfirmedShift, setHasConfirmedShift] = useState(false); // Changed from hasActiveShiftRequest
 
   const fetchRidesAndAuth = async () => {
     setLoading(true);
@@ -62,12 +59,11 @@ function ResultsLogic() {
 
     if (ridesData) setRides(ridesData);
 
-    // 2. Fetch user's existing requests safely
+    // 2. Fetch user's existing requests
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
       setIsLoggedIn(true);
       
-      // We do an inner join to only get requests for THIS EXACT date and shift
       const { data: matches } = await supabase
         .from('trip_matches')
         .select(`
@@ -81,16 +77,19 @@ function ResultsLogic() {
         .eq('rides.departure_time', shift);
       
       if (matches && matches.length > 0) {
-        // Build the dictionary of exact statuses
         const statusMap: Record<string, string> = {};
+        let isConfirmed = false;
+        
         matches.forEach((m: any) => {
           statusMap[String(m.ride_id)] = m.match_status;
+          if (m.match_status === 'confirmed') isConfirmed = true; // Check if ANY are confirmed
         });
+        
         setUserRideStatuses(statusMap);
-        setHasActiveShiftRequest(true); // Lock the shift!
+        setHasConfirmedShift(isConfirmed); // Only lock if confirmed!
       } else {
         setUserRideStatuses({});
-        setHasActiveShiftRequest(false); // Unlock the shift
+        setHasConfirmedShift(false);
       }
     } else {
       setIsLoggedIn(false);
@@ -130,13 +129,12 @@ function ResultsLogic() {
       passenger_id: user.id,
       pickup_postcode: finalPickup,
       seats_needed: seatsNeeded,
-      match_status: 'pending'
+      match_status: 'pending' // Just a request, no lock yet!
     }]);
 
     if (!error) {
-      // Instantly update UI: Mark this ride as pending and Lock the shift!
+      // Instantly mark THIS ride as pending, but DO NOT lock the shift yet!
       setUserRideStatuses(prev => ({ ...prev, [String(rideId)]: 'pending' }));
-      setHasActiveShiftRequest(true);
     } else {
       alert("Failed to book seat. Please try again.");
     }
@@ -186,13 +184,11 @@ function ResultsLogic() {
       .eq('match_status', 'pending'); 
 
     if (!error) {
-      // Instantly update UI: Remove the ride status and Unlock the shift!
       setUserRideStatuses(prev => {
         const next = { ...prev };
         delete next[String(rideId)];
         return next;
       });
-      setHasActiveShiftRequest(false);
     } else {
       alert("Failed to cancel request. Please try again.");
     }
@@ -232,7 +228,6 @@ function ResultsLogic() {
         </div>
       ) : rides.length === 0 ? (
         
-        /* NO RIDES FOUND STATE */
         <div className="bg-white rounded-[24px] border border-gray-200 p-8 text-center shadow-sm">
           {broadcastSuccess ? (
             <div className="animate-in zoom-in slide-in-from-bottom-4">
@@ -258,32 +253,30 @@ function ResultsLogic() {
               </p>
               <button 
                 onClick={handleBroadcast} 
-                disabled={actionLoadingId === 'broadcast' || hasActiveShiftRequest}
+                disabled={actionLoadingId === 'broadcast' || hasConfirmedShift}
                 className="w-full bg-emerald-600 text-white font-black py-4 rounded-xl shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 active:scale-95 disabled:opacity-50"
               >
                 {actionLoadingId === 'broadcast' ? <Loader2 className="h-5 w-5 animate-spin" /> : <Rss className="h-5 w-5" />}
-                {hasActiveShiftRequest ? "Shift Already Booked" : "Broadcast to Drivers"}
+                {hasConfirmedShift ? "Shift Already Booked" : "Broadcast to Drivers"}
               </button>
             </div>
           )}
         </div>
       ) : (
         
-        /* RIDES FOUND STATE */
         <div className="space-y-4 pt-2">
           <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest px-1">{rides.length} Drivers Available</h3>
           
           {rides.map((ride) => {
-            // --- THE UPGRADE: Dynamic UI Logic ---
             const rideStatus = userRideStatuses[String(ride.id)];
-            // If they have an active request for this shift, but it's NOT this specific ride, lock it down!
-            const isLockedOut = hasActiveShiftRequest && !rideStatus;
+            
+            // --- THE UPGRADE: Only lock other cards if a driver CONFIRMED a ride ---
+            const isLockedOut = hasConfirmedShift && rideStatus !== 'confirmed';
 
             return (
               <div key={ride.id} className={`bg-white rounded-[24px] shadow-sm transition-all overflow-hidden animate-in slide-in-from-bottom-4 ${rideStatus === 'confirmed' ? 'border-2 border-emerald-500' : 'border-2 border-emerald-50 hover:border-emerald-200'}`}>
                 <div className="p-5 space-y-4">
                   
-                  {/* Driver Info Header */}
                   <div className="flex justify-between items-start">
                     <div className="flex items-center gap-3">
                       <div className="h-12 w-12 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-800 font-black text-xl border border-emerald-200">
@@ -302,7 +295,6 @@ function ResultsLogic() {
                     </div>
                   </div>
                   
-                  {/* Ride Details Card */}
                   <div className="bg-gray-50 rounded-2xl p-4 flex justify-between items-center border border-gray-100">
                     <div className="flex items-center gap-2">
                        <Car className="h-5 w-5 text-gray-400" />
@@ -317,7 +309,7 @@ function ResultsLogic() {
                     </div>
                   </div>
 
-                  {/* --- THE UPGRADE: Contextual Action Buttons --- */}
+                  {/* Contextual Action Buttons */}
                   {rideStatus === 'confirmed' ? (
                     <Link href="/passenger/dashboard" className="w-full bg-emerald-50 text-emerald-700 border-2 border-emerald-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 transition-colors shadow-sm">
                       <CheckCircle className="h-5 w-5" /> Trip Confirmed!
@@ -343,7 +335,6 @@ function ResultsLogic() {
         </div>
       )}
 
-      {/* --- THE LOGIN MODAL OVERLAY --- */}
       {showLoginModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm px-4 animate-in fade-in">
           <div className="relative w-full max-w-md animate-in zoom-in-95 duration-300">
