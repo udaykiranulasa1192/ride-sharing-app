@@ -13,16 +13,17 @@ import {
   Calendar,
   CheckCircle,
   XCircle,
-  AlertCircle
+  AlertCircle,
+  X 
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import PassengerAuthForm from "@/components/PassengerAuthForm";
 
 function ResultsLogic() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Add this inside ResultsLogic
   const [requestedRideIds, setRequestedRideIds] = useState<Set<string>>(new Set());
-  // Extract data passed from the Search funnel
+  
   const from = searchParams.get("from") || "";
   const to = searchParams.get("to") || "";
   const date = searchParams.get("date") || "";
@@ -34,46 +35,53 @@ function ResultsLogic() {
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
 
-useEffect(() => {
-    async function fetchRides() {
-      const friendsList = friendsParam ? friendsParam.split(',') : [];
-      const totalSeatsNeeded = 1 + friendsList.length;
+  // --- Auth & Modal State ---
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
 
-      // 1. Fetch available rides
-      const { data: ridesData, error } = await supabase
-        .from('rides')
-        .select('*')
-        .eq('status', 'active')
-        .gte('remaining_seats', totalSeatsNeeded)
-        .eq('ride_date', date)
-        .eq('departure_time', shift)
-        .ilike('destination_hub', `%${to}%`);
+  // 1. Fetch Data
+  const fetchRidesAndAuth = async () => {
+    setLoading(true);
+    const friendsList = friendsParam ? friendsParam.split(',') : [];
+    const totalSeatsNeeded = 1 + friendsList.length;
 
-      if (!error && ridesData) setRides(ridesData);
+    // Fetch available rides (Anyone can see this now!)
+    const { data: ridesData } = await supabase
+      .from('rides')
+      .select('*')
+      .eq('status', 'active')
+      .gte('remaining_seats', totalSeatsNeeded)
+      .eq('ride_date', date)
+      .eq('departure_time', shift)
+      .ilike('destination_hub', `%${to}%`);
 
-      // 2. Fetch user's existing requests (THE UI BOUNCER)
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data: matches } = await supabase
-          .from('trip_matches')
-          .select('ride_id')
-          .eq('passenger_id', user.id)
-          .in('match_status', ['pending', 'confirmed']);
-        
-        if (matches) {
-          // THE FIX: Wrap m.ride_id in String() to prevent type mismatch
-          const requestedSet = new Set(matches.map((m: any) => String(m.ride_id)));
-          setRequestedRideIds(requestedSet);
-        }
-      }
+    if (ridesData) setRides(ridesData);
+
+    // Fetch user's existing requests ONLY if they are logged in
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      setIsLoggedIn(true);
+      const { data: matches } = await supabase
+        .from('trip_matches')
+        .select('ride_id')
+        .eq('passenger_id', user.id)
+        .in('match_status', ['pending', 'confirmed']);
       
-      setLoading(false);
+      if (matches) {
+        const requestedSet = new Set(matches.map((m: any) => String(m.ride_id)));
+        setRequestedRideIds(requestedSet);
+      }
+    } else {
+      setIsLoggedIn(false);
     }
     
-    if (to && date && shift) fetchRides();
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    if (to && date && shift) fetchRidesAndAuth();
   }, [to, date, shift, friendsParam]);
 
-  // Build the unified pickup string for the driver (Passenger + Friends)
   const getUnifiedPickupString = () => {
     let finalPickup = from;
     if (friendsParam) {
@@ -83,22 +91,20 @@ useEffect(() => {
     return finalPickup;
   };
 
-  // --- 1. THE BOOKING HANDSHAKE ---
+  // --- 2. THE INTERCEPTOR FOR BOOKING ---
   const handleBookSeat = async (rideId: string) => {
-    setActionLoadingId(rideId);
-    
-    // 1. Check if user is logged in
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      router.push("/passenger/login");
+    if (!isLoggedIn) {
+      setShowLoginModal(true);
       return;
     }
 
-    // 2. Prep data
+    setActionLoadingId(rideId);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
     const finalPickup = getUnifiedPickupString();
     const seatsNeeded = 1 + (friendsParam ? friendsParam.split(',').length : 0);
 
-    // 3. Send to database
     const { error } = await supabase.from('trip_matches').insert([{
       ride_id: rideId,
       passenger_id: user.id,
@@ -107,54 +113,24 @@ useEffect(() => {
       match_status: 'pending'
     }]);
 
-    // 4. THE FIX: Update UI only if the database accepted it!
     if (!error) {
       setRequestedRideIds(prev => new Set(prev).add(String(rideId)));
     } else {
       alert("Failed to book seat. Please try again.");
     }
-    
-    // 5. Turn off the loading spinner
-    setActionLoadingId(null);
-  };
-  // --- 2. CANCEL A REQUEST FROM SEARCH PAGE ---
-  const handleCancelRequest = async (rideId: string) => {
-    setActionLoadingId(rideId); // Reusing the same loading state for the spinner!
-    
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    // We delete the request entirely so the "Database Bouncer" lets them re-request it later if they change their mind
-    const { error } = await supabase
-      .from('trip_matches')
-      .delete()
-      .eq('ride_id', rideId)
-      .eq('passenger_id', user.id)
-      .eq('match_status', 'pending'); // Only delete if it's still pending!
-
-    if (!error) {
-      // Optimistic UI Update: Instantly remove it from the Set to show the Green button again
-      setRequestedRideIds(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(String(rideId));
-        return newSet;
-      });
-    } else {
-      alert("Failed to cancel request. Please try again.");
-    }
-    
     setActionLoadingId(null);
   };
 
-  // --- 2. THE BROADCAST HANDSHAKE (Jobs Board) ---
+  // --- 3. THE INTERCEPTOR FOR BROADCASTING ---
   const handleBroadcast = async () => {
-    setActionLoadingId('broadcast');
-    
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      router.push("/passenger/login");
+    if (!isLoggedIn) {
+      setShowLoginModal(true);
       return;
     }
+
+    setActionLoadingId('broadcast');
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
 
     const finalPickup = getUnifiedPickupString();
     const seatsNeeded = 1 + (friendsParam ? friendsParam.split(',').length : 0);
@@ -176,7 +152,35 @@ useEffect(() => {
     setActionLoadingId(null);
   };
 
-  // Format the date for the UI
+  const handleCancelRequest = async (rideId: string) => {
+    setActionLoadingId(rideId); 
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { error } = await supabase
+      .from('trip_matches')
+      .delete()
+      .eq('ride_id', rideId)
+      .eq('passenger_id', user.id)
+      .eq('match_status', 'pending'); 
+
+    if (!error) {
+      setRequestedRideIds(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(String(rideId));
+        return newSet;
+      });
+    } else {
+      alert("Failed to cancel request. Please try again.");
+    }
+    setActionLoadingId(null);
+  };
+
+  const handleLoginSuccess = async () => {
+    setShowLoginModal(false);
+    await fetchRidesAndAuth(); 
+  };
+
   const displayDate = date ? new Date(date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
 
   return (
@@ -284,49 +288,57 @@ useEffect(() => {
                   </div>
                 </div>
 
-                {/* Action Button: Checks if they already requested this specific ride */}
-             {/* THE FIX: Wrap ride.id in String() right here 👇 */}
-              {requestedRideIds.has(String(ride.id)) ? (
-  /* THE UPGRADE: Active Cancel Button instead of a disabled one */
-  <button 
-    onClick={() => handleCancelRequest(ride.id)}
-    disabled={actionLoadingId === ride.id}
-    className="w-full bg-red-50 text-red-600 border-2 border-red-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 hover:bg-red-100 transition-colors disabled:opacity-70 active:scale-[0.98] shadow-sm"
-  >
-    {actionLoadingId === ride.id ? (
-      <Loader2 className="h-5 w-5 animate-spin" />
-    ) : (
-      <XCircle className="h-5 w-5" />
-    )}
-    Cancel Request
-  </button>
-) : (
-  /* Standard Request Button */
-  <button 
-    onClick={() => handleBookSeat(ride.id)} 
-    disabled={actionLoadingId === ride.id}
-    className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70 shadow-md shadow-emerald-600/20"
-  >
-    {actionLoadingId === ride.id ? (
-      <Loader2 className="h-5 w-5 animate-spin" />
-    ) : (
-      "Request Seat"
-    )}
-  </button>
-)}
+                {/* Action Button */}
+                {requestedRideIds.has(String(ride.id)) ? (
+                  <button 
+                    onClick={() => handleCancelRequest(ride.id)}
+                    disabled={actionLoadingId === ride.id}
+                    className="w-full bg-red-50 text-red-600 border-2 border-red-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 hover:bg-red-100 transition-colors disabled:opacity-70 active:scale-[0.98] shadow-sm"
+                  >
+                    {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <XCircle className="h-5 w-5" />}
+                    Cancel Request
+                  </button>
+                ) : (
+                  <button 
+                    onClick={() => handleBookSeat(ride.id)} 
+                    disabled={actionLoadingId === ride.id}
+                    className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70 shadow-md shadow-emerald-600/20"
+                  >
+                    {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : "Request Seat"}
+                  </button>
+                )}
               </div>
             </div>
           ))}
         </div>
       )}
+
+      {/* --- THE LOGIN MODAL OVERLAY --- */}
+      {showLoginModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm px-4 animate-in fade-in">
+          <div className="relative w-full max-w-md animate-in zoom-in-95 duration-300">
+            {/* Close Button */}
+            <button 
+              onClick={() => setShowLoginModal(false)}
+              className="absolute -top-12 right-0 bg-white/20 hover:bg-white/40 text-white p-2 rounded-full backdrop-blur-md transition-all z-50"
+            >
+              <X className="h-6 w-6" />
+            </button>
+
+            {/* Premium Auth Form */}
+            <PassengerAuthForm onSuccess={handleLoginSuccess} />
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
 
+// THIS IS WHAT WAS MISSING! 
 export default function ResultsPage() {
   return (
     <div className="min-h-screen bg-gray-50 pb-24">
-      {/* Sleek Minimal Header */}
       <header className="bg-gray-50/90 backdrop-blur sticky top-0 z-40 px-4 py-3 flex items-center gap-3">
         <Link href="/search" className="p-2 -ml-2 rounded-full hover:bg-gray-200 text-gray-600 transition-colors">
           <ArrowLeft className="h-5 w-5" />

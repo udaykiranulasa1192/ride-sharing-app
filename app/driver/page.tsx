@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import WorkplaceAutocomplete from "@/components/WorkplaceAutocomplete";
 import { 
   Car, 
   MapPin, 
@@ -175,22 +176,34 @@ export default function DriverHomePage() {
             </button>
           </div>
 
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-200 space-y-5">
+          <div className="bg-white p-5 rounded-[32px] shadow-sm border border-gray-100 space-y-6">
+            
+            {/* --- 1. LEAVING FROM --- */}
             <div>
-              <label className="text-xs font-bold uppercase text-gray-400 mb-1.5 block">Leaving From</label>
-              <div className="relative">
-                <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-600" />
-                <input required type="text" placeholder="e.g. CF14 2QR" value={from} onChange={(e) => setFrom(e.target.value)} className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3 pl-10 pr-4 text-gray-900 focus:border-emerald-500 outline-none uppercase font-bold" />
-              </div>
+              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2 block ml-1">Leaving From</label>
+              
+              <WorkplaceAutocomplete 
+                value={from} 
+                onChange={setFrom} 
+                placeholder="Postcode or Workplace..." 
+                icon="map-pin"
+              />
+              
             </div>
 
+            {/* --- 2. GOING TO --- */}
             <div>
-              <label className="text-xs font-bold uppercase text-gray-400 mb-1.5 block">Going To</label>
-              <div className="relative">
-                <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-600" />
-                <input required type="text" placeholder="e.g. Amazon DBS2" value={to} onChange={(e) => setTo(e.target.value)} className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3 pl-10 pr-4 text-gray-900 focus:border-emerald-500 outline-none font-bold" />
-              </div>
+              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2 block ml-1">Going To</label>
+              
+              <WorkplaceAutocomplete 
+                value={to} 
+                onChange={setTo} 
+                placeholder="Search workplaces..." 
+                icon="navigation"
+              />
+              
             </div>
+            
           </div>
 
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-200 space-y-5">
