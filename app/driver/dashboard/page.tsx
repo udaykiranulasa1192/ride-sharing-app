@@ -94,18 +94,55 @@ export default function DriverDashboard() {
     setLoading(false);
   }
 
-  const handleAccept = async (requestId: string, rideId: string, seatsNeeded: number) => {
-    setProcessingId(requestId);
+  // --- THE UPGRADE: Auto-Cleanup Protocol ---
+  const handleAccept = async (req: any) => {
+    setProcessingId(req.id);
     
+    const requestId = req.id;
+    const rideId = req.ride_id;
+    const seatsNeeded = req.seats_needed;
+    const passengerId = req.passenger_id;
+    const rideDate = req.rides?.ride_date;
+    const departureTime = req.rides?.departure_time;
+
     const { data: rideData } = await supabase.from('rides').select('remaining_seats').eq('id', rideId).single();
     
     if (rideData) {
       const newSeats = rideData.remaining_seats - seatsNeeded;
       
-      // Deduct seats and confirm match
+      // --- STEP 1: Confirm match & deduct seats ---
       await supabase.from('rides').update({ remaining_seats: newSeats }).eq('id', rideId);
       await supabase.from('trip_matches').update({ match_status: 'confirmed' }).eq('id', requestId);
       
+      // --- STEP 2: Auto-Cleanup Broadcasts ---
+      if (passengerId && rideDate) {
+        await supabase
+          .from('open_requests')
+          .delete()
+          .eq('passenger_id', passengerId)
+          .eq('ride_date', rideDate);
+      }
+
+      // --- STEP 3: Auto-Cleanup Other Pending Requests ---
+      if (passengerId && rideDate && departureTime) {
+        const { data: otherPendingRequests } = await supabase
+          .from('trip_matches')
+          .select('id, rides!inner(ride_date, departure_time)')
+          .eq('passenger_id', passengerId)
+          .eq('match_status', 'pending')
+          .eq('rides.ride_date', rideDate)
+          .eq('rides.departure_time', departureTime);
+
+        if (otherPendingRequests && otherPendingRequests.length > 0) {
+          const idsToDelete = otherPendingRequests.map(pReq => pReq.id);
+          await supabase
+            .from('trip_matches')
+            .delete()
+            .in('id', idsToDelete);
+        }
+      }
+
+      // --- STEP 4: Refresh Data ---
       await fetchDashboardData();
     }
     
@@ -119,7 +156,6 @@ export default function DriverDashboard() {
     setProcessingId(null);
   };
 
-  // --- BEAUTIFUL CANCEL LOGIC ---
   const triggerCancelWarning = (rideId: string) => {
     setRideToCancel(rideId);
     setCancelModalOpen(true);
@@ -129,7 +165,6 @@ export default function DriverDashboard() {
     if (!rideToCancel) return;
     setProcessingId(rideToCancel);
     
-    // Mark the ride and associated matches as cancelled
     await supabase.from('rides').update({ status: 'cancelled' }).eq('id', rideToCancel);
     await supabase.from('trip_matches').update({ match_status: 'cancelled' }).eq('ride_id', rideToCancel);
     
@@ -140,7 +175,6 @@ export default function DriverDashboard() {
     setRideToCancel(null);
   };
 
-  // Helper to nicely format Shift Time
   const formatShiftTime = (ride: any) => {
     if (ride.trip_type === "round_trip" && ride.return_time) {
       return `${ride.departure_time} to ${ride.return_time}`;
@@ -220,8 +254,9 @@ export default function DriverDashboard() {
                   </div>
 
                   <div className="flex gap-2">
+                    {/* THE UPGRADE: We pass the whole 'req' object now */}
                     <button 
-                      onClick={() => handleAccept(req.id, req.ride_id, req.seats_needed)}
+                      onClick={() => handleAccept(req)}
                       disabled={!!processingId}
                       className="flex-[2] bg-emerald-600 text-white py-4 rounded-xl font-black text-sm flex items-center justify-center gap-2 hover:bg-emerald-700 shadow-md shadow-emerald-600/20 active:scale-95 transition-all disabled:opacity-50"
                     >
