@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import DriverNav from "@/components/DriverNav";
+import Navbar from "@/components/Navbar"; // Your new top header with Sign Out
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -18,13 +18,12 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        {/* The main content of your pages */}
-        <div className="min-h-screen">
+        {/* Navbar is here so it shows for EVERYONE (Driver & Passenger) */}
+        <Navbar />
+
+        <div className="min-h-screen bg-gray-50">
           {children}
         </div>
-        
-        {/* The navigation bar sits at the bottom */}
-        <DriverNav />
       </body>
     </html>
   );

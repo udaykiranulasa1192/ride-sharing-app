@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import PassengerAuthForm from "@/components/PassengerAuthForm";
+// --- ADDED THE BOTTOM NAV IMPORT ---
+import PassengerNav from "@/components/PassengerBottomNav"; 
 
 function ResultsLogic() {
   const router = useRouter();
@@ -38,16 +40,14 @@ function ResultsLogic() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
 
-  // --- THE UPGRADE: Only lock the shift if a trip is actually CONFIRMED ---
   const [userRideStatuses, setUserRideStatuses] = useState<Record<string, string>>({});
-  const [hasConfirmedShift, setHasConfirmedShift] = useState(false); // Changed from hasActiveShiftRequest
+  const [hasConfirmedShift, setHasConfirmedShift] = useState(false); 
 
   const fetchRidesAndAuth = async () => {
     setLoading(true);
     const friendsList = friendsParam ? friendsParam.split(',') : [];
     const totalSeatsNeeded = 1 + friendsList.length;
 
-    // 1. Fetch available rides
     const { data: ridesData } = await supabase
       .from('rides')
       .select('*')
@@ -59,7 +59,6 @@ function ResultsLogic() {
 
     if (ridesData) setRides(ridesData);
 
-    // 2. Fetch user's existing requests
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
       setIsLoggedIn(true);
@@ -82,11 +81,11 @@ function ResultsLogic() {
         
         matches.forEach((m: any) => {
           statusMap[String(m.ride_id)] = m.match_status;
-          if (m.match_status === 'confirmed') isConfirmed = true; // Check if ANY are confirmed
+          if (m.match_status === 'confirmed') isConfirmed = true; 
         });
         
         setUserRideStatuses(statusMap);
-        setHasConfirmedShift(isConfirmed); // Only lock if confirmed!
+        setHasConfirmedShift(isConfirmed); 
       } else {
         setUserRideStatuses({});
         setHasConfirmedShift(false);
@@ -129,11 +128,10 @@ function ResultsLogic() {
       passenger_id: user.id,
       pickup_postcode: finalPickup,
       seats_needed: seatsNeeded,
-      match_status: 'pending' // Just a request, no lock yet!
+      match_status: 'pending' 
     }]);
 
     if (!error) {
-      // Instantly mark THIS ride as pending, but DO NOT lock the shift yet!
       setUserRideStatuses(prev => ({ ...prev, [String(rideId)]: 'pending' }));
     } else {
       alert("Failed to book seat. Please try again.");
@@ -205,7 +203,6 @@ function ResultsLogic() {
   return (
     <div className="space-y-6 animate-in fade-in">
       
-      {/* Route Summary Banner */}
       <div className="bg-emerald-600 rounded-[24px] p-5 text-white shadow-md shadow-emerald-600/20 relative overflow-hidden">
         <div className="absolute top-0 right-0 p-4 opacity-10">
           <MapPin className="h-24 w-24" />
@@ -269,8 +266,6 @@ function ResultsLogic() {
           
           {rides.map((ride) => {
             const rideStatus = userRideStatuses[String(ride.id)];
-            
-            // --- THE UPGRADE: Only lock other cards if a driver CONFIRMED a ride ---
             const isLockedOut = hasConfirmedShift && rideStatus !== 'confirmed';
 
             return (
@@ -309,7 +304,6 @@ function ResultsLogic() {
                     </div>
                   </div>
 
-                  {/* Contextual Action Buttons */}
                   {rideStatus === 'confirmed' ? (
                     <Link href="/passenger/dashboard" className="w-full bg-emerald-50 text-emerald-700 border-2 border-emerald-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 transition-colors shadow-sm">
                       <CheckCircle className="h-5 w-5" /> Trip Confirmed!
@@ -352,7 +346,7 @@ function ResultsLogic() {
 
 export default function ResultsPage() {
   return (
-    <div className="min-h-screen bg-gray-50 pb-24">
+    <div className="min-h-screen bg-gray-50 pb-24 relative">
       <header className="bg-gray-50/90 backdrop-blur sticky top-0 z-40 px-4 py-3 flex items-center gap-3">
         <Link href="/search" className="p-2 -ml-2 rounded-full hover:bg-gray-200 text-gray-600 transition-colors">
           <ArrowLeft className="h-5 w-5" />
@@ -370,6 +364,10 @@ export default function ResultsPage() {
           <ResultsLogic />
         </Suspense>
       </main>
+
+      {/* --- ADDED THE BOTTOM NAV HERE --- */}
+      <PassengerNav />
+
     </div>
   );
 }
