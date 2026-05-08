@@ -89,31 +89,47 @@ export default function JobsBoard() {
     setBundles(finalBundles);
     setLoading(false);
   }
-
-  // --- ONE-CLICK ROUTE CREATION ---
+// --- ONE-CLICK ROUTE CREATION ---
   const handleAcceptBundle = async (bundle: any) => {
     setProcessingId(bundle.id);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    // We need the driver's vehicle details
-    const { data: driverProfile } = await supabase.from('driver_profiles').select('vehicle_details').eq('id', user.id).single();
+    
+    if (!user) {
+      setProcessingId(null);
+      return;
+    }
 
     try {
+      // THE FIX 1: We need to pull the driver's First and Last name to attach to the ride
+      const { data: driverProfile } = await supabase
+        .from('driver_profiles')
+        .select('first_name, last_name, vehicle_details')
+        .eq('id', user.id)
+        .single();
+
+      const driverFullName = driverProfile 
+        ? `${driverProfile.first_name} ${driverProfile.last_name}` 
+        : "Verified Driver";
+
+      // THE FIX 2: Safely round the average price to exactly 2 decimal places (e.g. 8.33)
+      const averagePrice = parseFloat((bundle.totalEarnings / bundle.totalSeats).toFixed(2));
+
       // 1. Create a NEW RIDE for the driver based on this bundle
       const { data: newRide, error: rideError } = await supabase.from('rides').insert([{
         driver_id: user.id,
+        driver_name: driverFullName, // Added the missing driver name!
         destination_hub: bundle.hub,
         ride_date: bundle.date,
         departure_time: bundle.time,
         total_seats_capacity: 4,
         remaining_seats: 4 - bundle.totalSeats,
-        price: bundle.totalEarnings / bundle.totalSeats, // Average price metric
+        price: averagePrice,         // Safely rounded price!
         status: 'active',
         vehicle: driverProfile?.vehicle_details || 'Standard Car'
       }]).select().single();
 
-      if (rideError) throw rideError;
+      // THE FIX 3: Explicitly check and throw the exact error message from Supabase
+      if (rideError) throw new Error(`Ride Creation Failed: ${rideError.message}`);
 
       // 2. Auto-Confirm all passengers in this bundle to the new ride
       const matchesToInsert = bundle.passengers.map((p: any) => ({
@@ -124,18 +140,21 @@ export default function JobsBoard() {
         match_status: 'confirmed'
       }));
 
-      await supabase.from('trip_matches').insert(matchesToInsert);
+      const { error: matchError } = await supabase.from('trip_matches').insert(matchesToInsert);
+      if (matchError) throw new Error(`Passenger Match Failed: ${matchError.message}`);
 
       // 3. Sweep the Jobs Board: Delete these requests so no one else grabs them
       const requestIdsToDelete = bundle.passengers.map((p: any) => p.id);
-      await supabase.from('open_requests').delete().in('id', requestIdsToDelete);
+      const { error: deleteError } = await supabase.from('open_requests').delete().in('id', requestIdsToDelete);
+      if (deleteError) throw new Error(`Jobs Board Cleanup Failed: ${deleteError.message}`);
 
       // 4. Route successfully claimed! Send driver to their dashboard.
       router.push('/driver/dashboard');
 
-    } catch (error) {
-      console.error(error);
-      alert("Something went wrong claiming this route.");
+    } catch (error: any) {
+      // Now the alert will tell you exactly what went wrong instead of a generic message!
+      console.error("Full Trace:", error);
+      alert(error.message || "Something went wrong claiming this route.");
       setProcessingId(null);
     }
   };
