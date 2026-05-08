@@ -90,6 +90,7 @@ export default function JobsBoard() {
     setLoading(false);
   }
 // --- ONE-CLICK ROUTE CREATION ---
+  // --- ONE-CLICK ROUTE CREATION ---
   const handleAcceptBundle = async (bundle: any) => {
     setProcessingId(bundle.id);
     const { data: { user } } = await supabase.auth.getUser();
@@ -100,7 +101,6 @@ export default function JobsBoard() {
     }
 
     try {
-      // THE FIX 1: We need to pull the driver's First and Last name to attach to the ride
       const { data: driverProfile } = await supabase
         .from('driver_profiles')
         .select('first_name, last_name, vehicle_details')
@@ -111,24 +111,28 @@ export default function JobsBoard() {
         ? `${driverProfile.first_name} ${driverProfile.last_name}` 
         : "Verified Driver";
 
-      // THE FIX 2: Safely round the average price to exactly 2 decimal places (e.g. 8.33)
       const averagePrice = parseFloat((bundle.totalEarnings / bundle.totalSeats).toFixed(2));
+
+      // --- THE FIX: Extract the Outward Code ---
+      // We grab the first passenger's postcode (e.g., "CF14 2QR") and split by space to get "CF14"
+      const firstPassengerPostcode = bundle.passengers[0].pickup_postcode || "";
+      const outwardCode = firstPassengerPostcode.trim().split(' ')[0].toUpperCase();
 
       // 1. Create a NEW RIDE for the driver based on this bundle
       const { data: newRide, error: rideError } = await supabase.from('rides').insert([{
         driver_id: user.id,
-        driver_name: driverFullName, // Added the missing driver name!
+        driver_name: driverFullName,
         destination_hub: bundle.hub,
         ride_date: bundle.date,
         departure_time: bundle.time,
         total_seats_capacity: 4,
         remaining_seats: 4 - bundle.totalSeats,
-        price: averagePrice,         // Safely rounded price!
+        price: averagePrice,
         status: 'active',
-        vehicle: driverProfile?.vehicle_details || 'Standard Car'
+        vehicle: driverProfile?.vehicle_details || 'Standard Car',
+        outward_code: outwardCode // <--- ADDED REQUIRED COLUMN HERE!
       }]).select().single();
 
-      // THE FIX 3: Explicitly check and throw the exact error message from Supabase
       if (rideError) throw new Error(`Ride Creation Failed: ${rideError.message}`);
 
       // 2. Auto-Confirm all passengers in this bundle to the new ride
@@ -152,13 +156,11 @@ export default function JobsBoard() {
       router.push('/driver/dashboard');
 
     } catch (error: any) {
-      // Now the alert will tell you exactly what went wrong instead of a generic message!
       console.error("Full Trace:", error);
       alert(error.message || "Something went wrong claiming this route.");
       setProcessingId(null);
     }
   };
-
   const displayDate = (dateStr: string) => new Date(dateStr).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
   if (loading) return (
