@@ -118,19 +118,20 @@ export default function JobsBoard() {
       const firstPassengerPostcode = bundle.passengers[0].pickup_postcode || "";
       const outwardCode = firstPassengerPostcode.trim().split(' ')[0].toUpperCase();
 
-      // 1. Create a NEW RIDE for the driver based on this bundle
+   // 1. Create a NEW RIDE for the driver based on this bundle
       const { data: newRide, error: rideError } = await supabase.from('rides').insert([{
         driver_id: user.id,
         driver_name: driverFullName,
         destination_hub: bundle.hub,
         ride_date: bundle.date,
         departure_time: bundle.time,
+        shift_type: bundle.time,      // <--- THE FIX: ADDED REQUIRED COLUMN HERE!
         total_seats_capacity: 4,
         remaining_seats: 4 - bundle.totalSeats,
         price: averagePrice,
         status: 'active',
         vehicle: driverProfile?.vehicle_details || 'Standard Car',
-        outward_code: outwardCode // <--- ADDED REQUIRED COLUMN HERE!
+        outward_code: outwardCode 
       }]).select().single();
 
       if (rideError) throw new Error(`Ride Creation Failed: ${rideError.message}`);
