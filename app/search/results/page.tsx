@@ -15,12 +15,14 @@ import {
   XCircle,
   AlertCircle,
   X,
-  Lock
+  Lock,
+  LayoutDashboard
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import PassengerAuthForm from "@/components/PassengerAuthForm";
-// --- ADDED THE BOTTOM NAV IMPORT ---
-import PassengerNav from "@/components/PassengerBottomNav"; 
+import PassengerBottomNav from "@/components/PassengerBottomNav";
+// --- THE UPGRADE: Import our new Pricing Engine! ---
+import { calculateTripPrice } from "@/lib/pricing";
 
 function ResultsLogic() {
   const router = useRouter();
@@ -36,6 +38,7 @@ function ResultsLogic() {
   const [loading, setLoading] = useState(true);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
+  const [calculatedFare, setCalculatedFare] = useState<number | null>(null);
 
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -139,6 +142,7 @@ function ResultsLogic() {
     setActionLoadingId(null);
   };
 
+  // --- THE UPGRADE: Smart Algorithmic Broadcast ---
   const handleBroadcast = async () => {
     if (!isLoggedIn) {
       setShowLoginModal(true);
@@ -150,22 +154,89 @@ function ResultsLogic() {
     if (!user) return;
 
     const finalPickup = getUnifiedPickupString();
+    const cleanPickupPostcode = from.replace(/[^a-zA-Z0-9]/g, ''); // Clean for API
     const seatsNeeded = 1 + (friendsParam ? friendsParam.split(',').length : 0);
 
-    const { error } = await supabase.from('open_requests').insert([{
-      passenger_id: user.id,
-      pickup_postcode: finalPickup,
-      destination_hub: to,
-      ride_date: date,
-      shift_type: shift,
-      seats_needed: seatsNeeded
-    }]);
+    try {
+      // 1. Ask postcodes.io for the Passenger's exact coordinates (100% Free)
+      const pickupRes = await fetch(`https://api.postcodes.io/postcodes/${cleanPickupPostcode}`);
+      const pickupData = await pickupRes.json();
+      
+      if (pickupData.status !== 200) {
+        alert("We couldn't verify your pickup postcode. Please check it and try again.");
+        setActionLoadingId(null);
+        return;
+      }
+      
+      const pickupLat = pickupData.result.latitude;
+      const pickupLng = pickupData.result.longitude;
 
-    if (!error) {
-      setBroadcastSuccess(true);
-    } else {
-      alert("Failed to broadcast request.");
+      // 2. Check if the Destination Hub exists in our Database
+      const { data: hubData } = await supabase
+        .from('destination_hubs')
+        .select('*')
+        .ilike('hub_name', `%${to}%`)
+        .single();
+
+      let dropoffLat = 0;
+      let dropoffLng = 0;
+      let finalPrice = 0;
+      let hubId = null;
+
+      if (hubData) {
+        // We know this hub! 
+        dropoffLat = hubData.latitude;
+        dropoffLng = hubData.longitude;
+        hubId = hubData.id;
+
+        // Use the hardcoded fixed price if you set one, otherwise let the math do it!
+        if (hubData.fixed_price) {
+          finalPrice = parseFloat(hubData.fixed_price);
+        } else {
+          finalPrice = calculateTripPrice(pickupLat, pickupLng, dropoffLat, dropoffLng, seatsNeeded);
+        }
+      } else {
+        // Fallback: If it's a new location, try treating 'to' as a postcode
+        const cleanDropoffPostcode = to.replace(/[^a-zA-Z0-9]/g, '');
+        const dropRes = await fetch(`https://api.postcodes.io/postcodes/${cleanDropoffPostcode}`);
+        const dropData = await dropRes.json();
+
+        if (dropData.status === 200) {
+          dropoffLat = dropData.result.latitude;
+          dropoffLng = dropData.result.longitude;
+          finalPrice = calculateTripPrice(pickupLat, pickupLng, dropoffLat, dropoffLng, seatsNeeded);
+        } else {
+          // Absolute last resort: Standard flat rate if the API fails
+          finalPrice = 10.00 * seatsNeeded; 
+        }
+      }
+
+      // 3. Save EVERYTHING to the jobs board
+      const { error } = await supabase.from('open_requests').insert([{
+        passenger_id: user.id,
+        pickup_postcode: finalPickup,
+        destination_hub: to,
+        destination_hub_id: hubId, // Links it properly in DB!
+        pickup_latitude: pickupLat,
+        pickup_longitude: pickupLng,
+        ride_date: date,
+        shift_type: shift,
+        seats_needed: seatsNeeded,
+        calculated_price: finalPrice // The Driver will see this exact number!
+      }]);
+
+      if (!error) {
+        setCalculatedFare(finalPrice);
+        setBroadcastSuccess(true);
+      } else {
+        alert("Failed to broadcast request.");
+      }
+
+    } catch (err) {
+      console.error(err);
+      alert("Something went wrong calculating your route.");
     }
+
     setActionLoadingId(null);
   };
 
@@ -231,7 +302,10 @@ function ResultsLogic() {
               <div className="mx-auto h-20 w-20 bg-emerald-50 rounded-full flex items-center justify-center mb-5 border border-emerald-100">
                 <CheckCircle className="h-10 w-10 text-emerald-500" />
               </div>
-              <h3 className="font-black text-gray-900 text-2xl mb-2 tracking-tight">Broadcast Sent!</h3>
+              <h3 className="font-black text-gray-900 text-2xl mb-1 tracking-tight">Broadcast Sent!</h3>
+              {/* Show the passenger their generated fare! */}
+              <p className="font-black text-emerald-600 text-xl mb-4">Estimated Fare: £{calculatedFare?.toFixed(2)}</p>
+              
               <p className="text-gray-500 text-sm mb-8 leading-relaxed">
                 Your request has been beamed to our driver network. We will notify you the moment a driver accepts your trip.
               </p>
@@ -261,6 +335,7 @@ function ResultsLogic() {
         </div>
       ) : (
         
+        /* ... Render rides (exact same as before) ... */
         <div className="space-y-4 pt-2">
           <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest px-1">{rides.length} Drivers Available</h3>
           
@@ -271,7 +346,6 @@ function ResultsLogic() {
             return (
               <div key={ride.id} className={`bg-white rounded-[24px] shadow-sm transition-all overflow-hidden animate-in slide-in-from-bottom-4 ${rideStatus === 'confirmed' ? 'border-2 border-emerald-500' : 'border-2 border-emerald-50 hover:border-emerald-200'}`}>
                 <div className="p-5 space-y-4">
-                  
                   <div className="flex justify-between items-start">
                     <div className="flex items-center gap-3">
                       <div className="h-12 w-12 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-800 font-black text-xl border border-emerald-200">
@@ -321,7 +395,6 @@ function ResultsLogic() {
                       {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : "Request Seat"}
                     </button>
                   )}
-
                 </div>
               </div>
             );
@@ -339,7 +412,6 @@ function ResultsLogic() {
           </div>
         </div>
       )}
-
     </div>
   );
 }
@@ -347,11 +419,21 @@ function ResultsLogic() {
 export default function ResultsPage() {
   return (
     <div className="min-h-screen bg-gray-50 pb-24 relative">
-      <header className="bg-gray-50/90 backdrop-blur sticky top-0 z-40 px-4 py-3 flex items-center gap-3">
-        <Link href="/search" className="p-2 -ml-2 rounded-full hover:bg-gray-200 text-gray-600 transition-colors">
-          <ArrowLeft className="h-5 w-5" />
+      <header className="bg-gray-50/90 backdrop-blur sticky top-0 z-40 px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Link href="/search" className="p-2 -ml-2 rounded-full hover:bg-gray-200 text-gray-600 transition-colors">
+            <ArrowLeft className="h-5 w-5" />
+          </Link>
+          <h1 className="text-lg font-black text-gray-900 tracking-tight">Available Routes</h1>
+        </div>
+        
+        <Link 
+          href="/passenger/dashboard" 
+          className="bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-xl text-xs font-black hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 transition-all shadow-sm flex items-center gap-2 active:scale-95"
+        >
+          <LayoutDashboard className="h-4 w-4" />
+          Dashboard
         </Link>
-        <h1 className="text-lg font-black text-gray-900 tracking-tight">Available Routes</h1>
       </header>
 
       <main className="max-w-md mx-auto p-4 pt-2">
@@ -365,9 +447,7 @@ export default function ResultsPage() {
         </Suspense>
       </main>
 
-      {/* --- ADDED THE BOTTOM NAV HERE --- */}
-      <PassengerNav />
-
+      <PassengerBottomNav />
     </div>
   );
 }

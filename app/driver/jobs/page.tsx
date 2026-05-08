@@ -1,252 +1,257 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { 
-  Rss, 
   MapPin, 
-  Navigation, 
   Clock, 
   Users, 
-  CheckCircle, 
   Loader2, 
-  AlertCircle,
-  Calendar
+  Car, 
+  ArrowLeft,
+  Banknote,
+  Navigation
 } from "lucide-react";
 import Link from "next/link";
 import DriverNav from "@/components/DriverNav";
-import { useRouter } from "next/navigation";
 
 export default function JobsBoard() {
   const router = useRouter();
-  const [jobs, setJobs] = useState<any[]>([]);
+  const [bundles, setBundles] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState<string | null>(null);
-  const [successBanner, setSuccessBanner] = useState(false);
 
   useEffect(() => {
-    fetchJobs();
+    fetchAndBundleJobs();
   }, []);
 
-  async function fetchJobs() {
+  async function fetchAndBundleJobs() {
     setLoading(true);
-    
-    // Fetch all open requests and join with the passenger's profile
-    const { data, error } = await supabase
+
+    // 1. Fetch ALL open requests (the jobs board)
+    const { data: requests } = await supabase
       .from('open_requests')
-      .select(`
-        *,
-        passenger_profiles:passenger_id(first_name, last_name)
-      `)
-      .order('created_at', { ascending: false });
+      .select('*')
+      .order('ride_date', { ascending: true });
 
-    if (!error && data) {
-      setJobs(data);
-    }
-    setLoading(false);
-  }
-
- const handleAcceptJob = async (job: any) => {
-    setProcessingId(job.id);
-    const { data: { user } } = await supabase.auth.getUser();
-    
-    if (!user) {
-      router.push("/driver/login");
+    if (!requests || requests.length === 0) {
+      setBundles([]);
+      setLoading(false);
       return;
     }
 
-    try {
-      // 1. SMART CHECK: Use .maybeSingle() so it doesn't crash if they have no rides!
-      const { data: existingRide, error: existingError } = await supabase
-        .from('rides')
-        .select('*')
-        .eq('driver_id', user.id)
-        .eq('ride_date', job.ride_date)
-        .eq('shift_type', job.shift_type)
-        .eq('status', 'active')
-        .maybeSingle();
+    // 2. Fetch Passenger Profiles so we have their names
+    const passengerIds = [...new Set(requests.map(r => r.passenger_id))];
+    const { data: profilesData } = await supabase
+      .from('passenger_profiles')
+      .select('id, first_name, last_name')
+      .in('id', passengerIds);
 
-      if (existingError) throw new Error(`Existing Ride Check Failed: ${existingError.message}`);
+    const pMap: Record<string, any> = {};
+    profilesData?.forEach(p => { pMap[p.id] = p; });
 
-      let targetRideId;
+    // 3. THE SMART BUNDLE ALGORITHM
+    const bundleMap: Record<string, any> = {};
 
-      if (existingRide) {
-        if (existingRide.remaining_seats < job.seats_needed) {
-          throw new Error("You don't have enough seats left in your current ride to accept this job!");
-        }
-        
-        targetRideId = existingRide.id;
-        
-        const { error: updateError } = await supabase.from('rides').update({
-          remaining_seats: existingRide.remaining_seats - job.seats_needed
-        }).eq('id', targetRideId);
-
-        if (updateError) throw new Error(`Seat Update Failed: ${updateError.message}`);
-
-      } else {
-        // 2. CREATE NEW RIDE
-        const { data: profile } = await supabase.from('driver_profiles').select('*').eq('id', user.id).maybeSingle();
-        
-        const { data: newRide, error: rideError } = await supabase.from('rides').insert([{
-          driver_id: user.id,
-          driver_name: profile ? `${profile.first_name} ${profile.last_name}` : "Driver",
-          vehicle: profile?.vehicle_details || "Standard Vehicle",
-          outward_code: job.pickup_postcode, 
-          destination_hub: job.destination_hub,
-          shift_type: job.shift_type,
-          departure_time: job.shift_type.includes('-') ? job.shift_type.split(' - ')[0] : job.shift_type,
-          trip_type: 'one_way',
-          ride_date: job.ride_date,
-          price: 4.50, 
-          total_seats_capacity: 4,
-          remaining_seats: 4 - job.seats_needed,
-          status: 'active'
-        }]).select().single();
-
-        if (rideError) throw new Error(`Ride Auto-Generation Failed: ${rideError.message}`);
-        targetRideId = newRide.id;
+    requests.forEach(req => {
+      // Create a unique key for the Destination + Date + Shift
+      const key = `${req.destination_hub}_${req.ride_date}_${req.shift_type}`;
+      
+      if (!bundleMap[key]) {
+        bundleMap[key] = {
+          id: key,
+          hub: req.destination_hub,
+          date: req.ride_date,
+          time: req.shift_type,
+          passengers: [],
+          totalSeats: 0,
+          totalEarnings: 0
+        };
       }
 
-      // 3. THE HANDSHAKE
-      const { error: matchError } = await supabase.from('trip_matches').insert([{
-        ride_id: targetRideId,
-        passenger_id: job.passenger_id,
-        pickup_postcode: job.pickup_postcode,
-        seats_needed: job.seats_needed,
+      // Check if we can fit them in a standard 4-seater car!
+      if (bundleMap[key].totalSeats + req.seats_needed <= 4) {
+        bundleMap[key].passengers.push({
+          ...req,
+          profile: pMap[req.passenger_id] || { first_name: 'Unknown', last_name: 'User' }
+        });
+        bundleMap[key].totalSeats += req.seats_needed;
+        bundleMap[key].totalEarnings += Number(req.calculated_price || 0);
+      }
+    });
+
+    // Convert map to an array and sort by Highest Earnings first!
+    const finalBundles = Object.values(bundleMap)
+      .filter(b => b.passengers.length > 0)
+      .sort((a, b) => b.totalEarnings - a.totalEarnings);
+
+    setBundles(finalBundles);
+    setLoading(false);
+  }
+
+  // --- ONE-CLICK ROUTE CREATION ---
+  const handleAcceptBundle = async (bundle: any) => {
+    setProcessingId(bundle.id);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    // We need the driver's vehicle details
+    const { data: driverProfile } = await supabase.from('driver_profiles').select('vehicle_details').eq('id', user.id).single();
+
+    try {
+      // 1. Create a NEW RIDE for the driver based on this bundle
+      const { data: newRide, error: rideError } = await supabase.from('rides').insert([{
+        driver_id: user.id,
+        destination_hub: bundle.hub,
+        ride_date: bundle.date,
+        departure_time: bundle.time,
+        total_seats_capacity: 4,
+        remaining_seats: 4 - bundle.totalSeats,
+        price: bundle.totalEarnings / bundle.totalSeats, // Average price metric
+        status: 'active',
+        vehicle: driverProfile?.vehicle_details || 'Standard Car'
+      }]).select().single();
+
+      if (rideError) throw rideError;
+
+      // 2. Auto-Confirm all passengers in this bundle to the new ride
+      const matchesToInsert = bundle.passengers.map((p: any) => ({
+        ride_id: newRide.id,
+        passenger_id: p.passenger_id,
+        pickup_postcode: p.pickup_postcode,
+        seats_needed: p.seats_needed,
         match_status: 'confirmed'
-      }]);
+      }));
 
-      if (matchError) throw new Error(`Match Confirmation Failed: ${matchError.message}`);
+      await supabase.from('trip_matches').insert(matchesToInsert);
 
-      // 4. CLEANUP
-      const { error: deleteError } = await supabase.from('open_requests').delete().eq('id', job.id);
-      
-      if (deleteError) throw new Error(`Broadcast Deletion Failed: ${deleteError.message}`);
+      // 3. Sweep the Jobs Board: Delete these requests so no one else grabs them
+      const requestIdsToDelete = bundle.passengers.map((p: any) => p.id);
+      await supabase.from('open_requests').delete().in('id', requestIdsToDelete);
 
-      // If it makes it here, everything worked perfectly!
-      await fetchJobs();
-      setSuccessBanner(true);
-      setTimeout(() => setSuccessBanner(false), 3000);
+      // 4. Route successfully claimed! Send driver to their dashboard.
+      router.push('/driver/dashboard');
 
-    } catch (err: any) {
-      console.error("Job Acceptance Error:", err);
-      // This will instantly tell you exactly which step failed and why!
-      alert(err.message || "An unexpected error occurred while claiming the job.");
-    } finally {
+    } catch (error) {
+      console.error(error);
+      alert("Something went wrong claiming this route.");
       setProcessingId(null);
     }
-    setTimeout(() => setSuccessBanner(false), 3000);
   };
 
+  const displayDate = (dateStr: string) => new Date(dateStr).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+
+  if (loading) return (
+    <div className="flex h-screen items-center justify-center bg-gray-50">
+      <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+    </div>
+  );
+
   return (
-    <div className="min-h-screen bg-gray-50 pb-24">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-40 shadow-sm px-4 py-4 flex justify-between items-center">
-        <div className="flex items-center gap-3">
-          <div className="h-10 w-10 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center">
-            <Rss className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-xl font-black text-gray-900 tracking-tight leading-none">Jobs Board</h1>
-            <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest mt-1">Live Passenger Broadcasts</p>
+    <div className="min-h-screen bg-gray-50 pb-24 relative">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-40 shadow-sm">
+        <div className="max-w-md mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Link href="/driver/dashboard" className="p-2 -ml-2 rounded-full hover:bg-gray-100 text-gray-500 transition-colors">
+              <ArrowLeft className="h-5 w-5" />
+            </Link>
+            <h1 className="text-lg font-black text-gray-900 tracking-tight">Available Jobs</h1>
           </div>
         </div>
       </header>
 
       <main className="max-w-md mx-auto px-4 py-6 space-y-6">
         
-        {/* SUCCESS BANNER */}
-        {successBanner && (
-          <div className="bg-emerald-600 text-white p-4 rounded-2xl flex items-center gap-3 shadow-lg shadow-emerald-600/20 animate-in slide-in-from-top-2">
-            <CheckCircle className="h-6 w-6 text-emerald-200" />
-            <div>
-              <p className="font-black text-sm">Job Accepted!</p>
-              <p className="text-xs font-medium text-emerald-100">The passenger has been added to your Dashboard.</p>
-            </div>
+        {/* HERO BANNER */}
+        <div className="bg-emerald-900 rounded-[24px] p-6 text-white shadow-xl relative overflow-hidden">
+          <div className="absolute -right-4 -top-4 opacity-20">
+            <Banknote className="h-32 w-32" />
           </div>
-        )}
-
-        <div className="flex items-center justify-between border-b border-gray-200 pb-2">
-          <h2 className="text-xs font-black text-gray-400 uppercase tracking-widest">Available Pickups</h2>
-          <span className="text-[10px] font-black bg-gray-200 text-gray-600 px-2 py-1 rounded-full">{jobs.length} Active</span>
+          <div className="relative z-10">
+            <p className="text-[10px] font-bold text-emerald-300 uppercase tracking-widest mb-1">Live Marketplace</p>
+            <h2 className="text-2xl font-black leading-tight mb-2">High-Profit Routes</h2>
+            <p className="text-sm text-emerald-100 font-medium">We've bundled nearby passengers going to the same hub to maximize your earnings.</p>
+          </div>
         </div>
 
-        {loading ? (
-          <div className="py-20 flex flex-col items-center justify-center space-y-4">
-            <Loader2 className="h-10 w-10 animate-spin text-emerald-600" />
-            <p className="text-sm font-bold text-gray-400 animate-pulse">Scanning network...</p>
-          </div>
-        ) : jobs.length === 0 ? (
-          <div className="bg-white rounded-[24px] border border-gray-200 p-8 text-center shadow-sm mt-4">
-            <div className="mx-auto h-16 w-16 bg-gray-50 rounded-full flex items-center justify-center mb-4 border border-gray-100">
-              <AlertCircle className="h-8 w-8 text-gray-300" />
-            </div>
-            <h3 className="font-black text-gray-900 text-xl mb-1">No Broadcasts</h3>
-            <p className="text-gray-500 text-sm">There are no passengers currently looking for a ride. Check back later!</p>
+        {bundles.length === 0 ? (
+          <div className="bg-white border-2 border-dashed border-gray-200 rounded-3xl p-10 text-center">
+            <Navigation className="h-12 w-12 text-gray-200 mx-auto mb-3" />
+            <p className="font-bold text-gray-400">No open requests right now.</p>
+            <p className="text-xs text-gray-300 mt-1">Check back later when shifts end!</p>
           </div>
         ) : (
-          jobs.map((job) => {
-            const passenger = job.passenger_profiles || { first_name: 'Unknown', last_name: 'Passenger' };
+          <div className="space-y-6">
+            {bundles.map((bundle) => (
+              
+              /* THE EARNINGS-FIRST BUNDLE CARD */
+              <div key={bundle.id} className="bg-white rounded-[32px] border-2 border-emerald-50 shadow-md shadow-emerald-600/5 overflow-hidden animate-in slide-in-from-bottom-4">
+                
+                {/* Header: Income Focus */}
+                <div className="bg-emerald-50 px-6 py-5 flex justify-between items-center border-b border-emerald-100">
+                  <div>
+                    <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-1">Guaranteed Earnings</p>
+                    <p className="font-black text-3xl text-gray-900 leading-none">£{bundle.totalEarnings.toFixed(2)}</p>
+                  </div>
+                  <div className="text-right">
+                     <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-1">Total Seats</p>
+                     <div className="bg-white px-3 py-1.5 rounded-xl border border-emerald-200 inline-flex items-center gap-1.5 shadow-sm">
+                       <Users className="h-4 w-4 text-emerald-600" />
+                       <span className="font-black text-gray-900">{bundle.totalSeats} / 4</span>
+                     </div>
+                  </div>
+                </div>
 
-            return (
-              <div key={job.id} className="bg-white rounded-[24px] border-2 border-emerald-50 shadow-sm overflow-hidden animate-in slide-in-from-bottom-4">
-                <div className="p-5">
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className="h-12 w-12 bg-gray-100 rounded-full flex items-center justify-center text-gray-700 font-black text-xl border border-gray-200">
-                        {passenger.first_name.charAt(0)}
-                      </div>
-                      <div>
-                        <p className="font-black text-gray-900 text-lg leading-none mb-1">
-                          {passenger.first_name} {passenger.last_name}
-                        </p>
-                        <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 uppercase tracking-widest">
-                          <Users className="h-3 w-3" /> Needs {job.seats_needed} Seat{job.seats_needed > 1 ? 's' : ''}
+                <div className="p-6 space-y-6">
+                  {/* Destination Info */}
+                  <div className="flex items-start gap-4">
+                    <div className="h-10 w-10 bg-gray-900 rounded-xl flex items-center justify-center shrink-0 shadow-md">
+                      <MapPin className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Destination Hub</p>
+                      <h4 className="font-black text-xl text-gray-900 leading-tight">{bundle.hub}</h4>
+                      <p className="text-xs font-bold text-emerald-600 mt-1 flex items-center gap-1">
+                        <Clock className="h-3 w-3" /> {displayDate(bundle.date)} at {bundle.time}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* The Stops (Passenger List) */}
+                  <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 space-y-3 relative">
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest pl-1 mb-2">Pickup Manifest</p>
+                    
+                    {bundle.passengers.map((p: any, idx: number) => (
+                      <div key={p.id} className="flex justify-between items-center bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+                        <div className="flex items-center gap-3">
+                           <div className="h-6 w-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-[10px] font-black">
+                             {idx + 1}
+                           </div>
+                           <div>
+                             <p className="font-black text-sm text-gray-900">{p.profile.first_name} {p.profile.last_name}</p>
+                             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{p.pickup_postcode}</p>
+                           </div>
                         </div>
+                        <p className="font-black text-emerald-600 text-sm">+£{Number(p.calculated_price).toFixed(2)}</p>
                       </div>
-                    </div>
+                    ))}
                   </div>
 
-                  <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 mb-5 space-y-3">
-                    <div className="flex items-center gap-3">
-                       <MapPin className="h-5 w-5 text-gray-400" />
-                       <div>
-                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none mb-1">Pickup Location</p>
-                         <p className="font-black text-gray-900 leading-none">{job.pickup_postcode}</p>
-                       </div>
-                    </div>
-                    <div className="h-px w-full bg-gray-200" />
-                    <div className="flex items-center gap-3">
-                       <Navigation className="h-5 w-5 text-gray-400" />
-                       <div>
-                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none mb-1">Going To</p>
-                         <p className="font-black text-emerald-700 leading-none">{job.destination_hub}</p>
-                       </div>
-                    </div>
-                  </div>
-
-                  <div className="flex justify-between items-center mb-5 px-1">
-                    <div className="flex items-center gap-2 text-sm font-bold text-gray-600">
-                      <Calendar className="h-4 w-4 text-gray-400" />
-                      {new Date(job.ride_date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}
-                    </div>
-                    <div className="flex items-center gap-2 text-sm font-bold text-gray-600">
-                      <Clock className="h-4 w-4 text-gray-400" />
-                      {job.shift_type}
-                    </div>
-                  </div>
-
+                  {/* Accept Button */}
                   <button 
-                    onClick={() => handleAcceptJob(job)} 
-                    disabled={processingId === job.id}
-                    className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70 shadow-md shadow-emerald-600/20"
+                    onClick={() => handleAcceptBundle(bundle)}
+                    disabled={!!processingId}
+                    className="w-full bg-emerald-600 text-white font-black text-lg py-5 rounded-2xl flex justify-center items-center gap-2 hover:bg-emerald-700 transition-all active:scale-[0.98] shadow-lg shadow-emerald-600/20 disabled:opacity-50"
                   >
-                    {processingId === job.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle className="h-5 w-5" />}
-                    Accept Job
+                    {processingId === bundle.id ? <Loader2 className="h-6 w-6 animate-spin" /> : <Car className="h-6 w-6" />}
+                    Accept Full Route
                   </button>
                 </div>
+
               </div>
-            );
-          })
+            ))}
+          </div>
         )}
       </main>
 
