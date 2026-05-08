@@ -119,14 +119,16 @@ requests.forEach(req => {
       const firstPassengerPostcode = bundle.passengers[0].pickup_postcode || "";
       const outwardCode = firstPassengerPostcode.trim().split(' ')[0].toUpperCase();
 
-   // 1. Create a NEW RIDE for the driver based on this bundle
+// 1. Create a NEW RIDE for the driver based on this bundle
+      // 1. Create a NEW RIDE for the driver based on this bundle
       const { data: newRide, error: rideError } = await supabase.from('rides').insert([{
         driver_id: user.id,
         driver_name: driverFullName,
         destination_hub: bundle.hub,
         ride_date: bundle.date,
         departure_time: bundle.time,
-        shift_type: bundle.time,      // <--- THE FIX: ADDED REQUIRED COLUMN HERE!
+        shift_type: bundle.time,      
+        trip_type: bundle.tripType || 'two_way', // <--- THE BULLETPROOF FIX
         total_seats_capacity: 4,
         remaining_seats: 4 - bundle.totalSeats,
         price: averagePrice,
