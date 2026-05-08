@@ -31,8 +31,11 @@ function ResultsLogic() {
   const from = searchParams.get("from") || "";
   const to = searchParams.get("to") || "";
   const date = searchParams.get("date") || "";
-  const shift = searchParams.get("shift") || "";
-  const friendsParam = searchParams.get("friends") || "";
+// Near the top of ResultsLogic:
+const shift = searchParams.get("shift") || "";
+const friendsParam = searchParams.get("friends") || "";
+// THE FIX: Changed the fallback to 'two_way'
+const tripTypeParam = searchParams.get("trip_type") || "two_way";
   
   const [rides, setRides] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,6 +48,7 @@ function ResultsLogic() {
 
   const [userRideStatuses, setUserRideStatuses] = useState<Record<string, string>>({});
   const [hasConfirmedShift, setHasConfirmedShift] = useState(false); 
+  
 
   const fetchRidesAndAuth = async () => {
     setLoading(true);

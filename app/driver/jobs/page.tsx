@@ -54,9 +54,8 @@ export default function JobsBoard() {
     // 3. THE SMART BUNDLE ALGORITHM
     const bundleMap: Record<string, any> = {};
 
-    requests.forEach(req => {
-      // Create a unique key for the Destination + Date + Shift
-      const key = `${req.destination_hub}_${req.ride_date}_${req.shift_type}`;
+requests.forEach(req => {
+      const key = `${req.destination_hub}_${req.ride_date}_${req.shift_type}_${req.trip_type}`;
       
       if (!bundleMap[key]) {
         bundleMap[key] = {
@@ -64,6 +63,8 @@ export default function JobsBoard() {
           hub: req.destination_hub,
           date: req.ride_date,
           time: req.shift_type,
+          // THE FIX: Changed the fallback to 'two_way'
+          tripType: req.trip_type || 'two_way', 
           passengers: [],
           totalSeats: 0,
           totalEarnings: 0
