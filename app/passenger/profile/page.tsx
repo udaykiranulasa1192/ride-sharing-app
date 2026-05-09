@@ -15,7 +15,7 @@ import {
   Star,
   CheckCircle,
   Mail,
-  ArrowLeft
+  AlertCircle
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import PassengerBottomNav from "@/components/PassengerBottomNav";
@@ -32,12 +32,23 @@ export default function PassengerProfile() {
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   
+  // Sleek Error/Success Toast State
+  const [toast, setToast] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  
   const [editForm, setEditForm] = useState({
     first_name: "",
     last_name: "",
     mobile_number: "+44",
-    postcode: ""
+    postcode: "" // We will use this for Postcode OR Place Name
   });
+
+  // Auto-dismiss toast after 3 seconds
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   const loadProfile = async () => {
     setLoading(true);
@@ -70,39 +81,71 @@ export default function PassengerProfile() {
     loadProfile(); 
   }, []);
 
-  // --- SMART INPUT FORMATTERS (Copied from Driver!) ---
-  const handlePostcodeChange = (val: string) => {
-    let formatted = val.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (formatted.length > 7) formatted = formatted.slice(0, 7);
-    if (formatted.length > 3) {
-      formatted = formatted.slice(0, formatted.length - 3) + ' ' + formatted.slice(formatted.length - 3);
-    }
-    setEditForm({ ...editForm, postcode: formatted });
-  };
-
   const handlePhoneChange = (val: string) => {
     if (!val.startsWith("+44")) val = "+44";
     const raw = val.replace("+44", "").replace(/[^0-9]/g, "");
     setEditForm({ ...editForm, mobile_number: "+44" + raw });
   };
 
+  // THE UPGRADE: Smart Geocoder Save Logic
   const handleUpdate = async () => {
     setSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    let lat = null;
+    let lng = null;
+    let finalLocationName = editForm.postcode.trim();
+
+    if (finalLocationName) {
+      try {
+        // 1. TRY STRICT POSTCODE API FIRST
+        const cleanPostcode = finalLocationName.replace(/\s+/g, '').toUpperCase();
+        const postRes = await fetch(`https://api.postcodes.io/postcodes/${cleanPostcode}`);
+        const postData = await postRes.json();
+        
+        if (postData.status === 200) {
+          lat = postData.result.latitude;
+          lng = postData.result.longitude;
+          finalLocationName = postData.result.postcode; // Format it nicely
+        } else {
+          // 2. FALLBACK TO OPENSTREETMAP FOR PLACE NAMES (e.g., "The Range")
+          const osmRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(finalLocationName + ', UK')}&format=json&limit=1`);
+          const osmData = await osmRes.json();
+
+          if (osmData && osmData.length > 0) {
+            lat = parseFloat(osmData[0].lat);
+            lng = parseFloat(osmData[0].lon);
+          } else {
+            setToast({ type: 'error', message: "We couldn't find that location. Please try adding the city name." });
+            setSaving(false);
+            return;
+          }
+        }
+      } catch (err) {
+        setToast({ type: 'error', message: "Network error while verifying location." });
+        setSaving(false);
+        return;
+      }
+    }
     
+    // 3. Save to database including coordinates
     const { error } = await supabase
       .from("passenger_profiles")
       .update({
         first_name: editForm.first_name,
         last_name: editForm.last_name,
         mobile_number: editForm.mobile_number,
-        postcode: editForm.postcode
+        postcode: finalLocationName, // Saves formatted postcode OR place name
+        home_latitude: lat,
+        home_longitude: lng
       })
-      .eq('id', user?.id);
+      .eq('id', user.id);
 
     if (error) {
-      alert("Failed to update profile.");
+      setToast({ type: 'error', message: "Failed to update profile." });
     } else {
+      setToast({ type: 'success', message: "Profile saved securely!" });
       await loadProfile();
       setIsEditing(false);
     }
@@ -118,9 +161,21 @@ export default function PassengerProfile() {
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-gray-50"><Loader2 className="h-8 w-8 animate-spin text-emerald-600" /></div>;
 
   return (
-    <div className="bg-gray-50 min-h-screen pb-24">
+    <div className="bg-gray-50 min-h-screen pb-24 relative">
+
+      {/* Sleek Toast Notification */}
+      {toast && (
+        <div className="fixed top-4 left-0 right-0 z-[200] flex justify-center px-4 pointer-events-none">
+          <div className="pointer-events-auto bg-gray-900 text-white rounded-xl p-3 shadow-xl flex items-center gap-3 w-full max-w-md animate-in slide-in-from-top-4 fade-in duration-300">
+            {toast.type === 'error' ? <AlertCircle className="h-5 w-5 text-red-400 shrink-0" /> : <CheckCircle className="h-5 w-5 text-emerald-400 shrink-0" />}
+            <p className="flex-1 text-sm font-semibold">{toast.message}</p>
+            <button onClick={() => setToast(null)} className="text-gray-400 hover:text-white p-1">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
       
-      {/* FIXED HEADER: Now matching the exact premium Driver design */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40 shadow-sm">
         <div className="max-w-md mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -186,7 +241,6 @@ export default function PassengerProfile() {
                   <CheckCircle className="h-4 w-4" />
                   <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Trips Taken</span>
                 </div>
-                {/* Fallback to 0 if we don't have a count yet */}
                 <p className="text-2xl font-black text-gray-900">{profile?.trips_count || 0}</p>
               </div>
 
@@ -230,15 +284,20 @@ export default function PassengerProfile() {
                   </div>
                 </div>
 
-                {/* Postcode */}
+                {/* Postcode / Location */}
                 <div className="flex items-center gap-4">
                   <div className="p-2.5 bg-gray-50 rounded-xl shrink-0"><MapPin className="h-5 w-5 text-emerald-600" /></div>
                   <div className="w-full">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Home Postcode</p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Pickup Location</p>
                     {isEditing ? (
-                      <input value={editForm.postcode} onChange={e => handlePostcodeChange(e.target.value)} placeholder="CF14 2QR" className="w-full border-b border-emerald-500 py-1 focus:outline-none font-bold text-gray-900 uppercase bg-transparent" />
+                      <input 
+                        value={editForm.postcode} 
+                        onChange={e => setEditForm({...editForm, postcode: e.target.value})} 
+                        placeholder="e.g. CF14 2QR or The Range" 
+                        className="w-full border-b border-emerald-500 py-1 focus:outline-none font-bold text-gray-900 bg-transparent" 
+                      />
                     ) : (
-                      <p className="font-bold text-gray-900 uppercase">{profile?.postcode}</p>
+                      <p className="font-bold text-gray-900 capitalize">{profile?.postcode}</p>
                     )}
                   </div>
                 </div>
@@ -263,7 +322,6 @@ export default function PassengerProfile() {
         )}
       </main>
       
-      {/* THE PASSENGER BOTTOM NAV */}
       <PassengerBottomNav />
     </div>
   );
