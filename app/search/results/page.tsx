@@ -291,16 +291,19 @@ function ResultsLogic() {
     }
     setActionLoadingId(null);
   };
-
-  const handleBroadcast = async () => {
+const handleBroadcast = async () => {
     if (!isLoggedIn) return setShowLoginModal(true);
     setActionLoadingId('broadcast');
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     try {
-      // 1. Create the Parent Pool
+      // 1. Create the Parent Pool (Added the required text cache fields back!)
       const { data: parentPool, error: parentError } = await supabase.from('open_requests').insert([{
+        passenger_id: user.id,                      // REQUIRED CACHE FIELD
+        pickup_postcode: getUnifiedPickupString(),  // REQUIRED CACHE FIELD
+        pickup_latitude: lat,                       // REQUIRED CACHE FIELD
+        pickup_longitude: lng,                      // REQUIRED CACHE FIELD
         destination_hub: to,
         ride_date: date,
         shift_type: shift,
@@ -308,7 +311,7 @@ function ResultsLogic() {
         calculated_price: customOffer 
       }]).select().single();
 
-      // 2. Add the Creator to the Children Table
+      // 2. Add the Creator to the Relational Children Table
       if (!parentError && parentPool) {
         const { error: childError } = await supabase.from('pool_passengers').insert([{
           request_id: parentPool.id,
@@ -320,8 +323,11 @@ function ResultsLogic() {
 
         if (!childError) {
           await fetchRidesAndAuth(); // Refresh UI instantly
+        } else {
+          console.error("Child Insert Error:", childError);
         }
       } else {
+        console.error("Parent Insert Error:", parentError);
         alert("Failed to broadcast request.");
       }
     } catch (err) {
