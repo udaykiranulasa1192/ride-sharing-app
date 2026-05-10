@@ -22,7 +22,9 @@ import {
   Users,
   Clock,
   UserPlus,
-  Radio
+  Radio,
+  Search,
+  Zap
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import PassengerAuthForm from "@/components/PassengerAuthForm";
@@ -51,7 +53,10 @@ function ResultsLogic() {
   
   // --- UPGRADED BROADCAST STATES ---
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
-  const [activeRequest, setActiveRequest] = useState<any | null>(null); // Now stores the FULL object to render the timeline!
+  const [activeRequest, setActiveRequest] = useState<any | null>(null); 
+  
+  // --- SURGE BOOST PRICING STATE ---
+  const [baseFare, setBaseFare] = useState<number>(0);
   const [customOffer, setCustomOffer] = useState<number>(0);
   
   const [pageError, setPageError] = useState<string | null>(null);
@@ -121,6 +126,8 @@ function ResultsLogic() {
         }
       }
 
+      // Initialize the Base Fare for Surge Buttons
+      setBaseFare(finalCalculatedFare);
       setCustomOffer(finalCalculatedFare);
 
       // 2. FETCH OPEN REQUESTS
@@ -180,7 +187,7 @@ function ResultsLogic() {
           
           if (userExistingReq) {
              setBroadcastSuccess(true);
-             setActiveRequest(userExistingReq); // Save full object to render timeline
+             setActiveRequest(userExistingReq); 
              setCustomOffer(userExistingReq.calculated_price);
           }
 
@@ -249,7 +256,6 @@ function ResultsLogic() {
     const newSeats = req.seats_needed + totalSeatsNeeded;
     const newPrice = req.calculated_price + customOffer; 
     
-    // THIS MERGES THE POSTCODES WITH A PIPE FOR THE TIMELINE UI
     const mergedPickups = `${req.pickup_postcode} | ${getUnifiedPickupString()}`;
 
     const { error } = await supabase
@@ -263,7 +269,6 @@ function ResultsLogic() {
 
     if (!error) {
       setBroadcastSuccess(true);
-      // Update the active request locally so the UI updates instantly
       setActiveRequest({
         ...req,
         seats_needed: newSeats,
@@ -297,7 +302,7 @@ function ResultsLogic() {
 
       if (!error && data) {
         setBroadcastSuccess(true);
-        setActiveRequest(data); // Save full object to render timeline
+        setActiveRequest(data); 
       } else {
         alert("Failed to broadcast request.");
       }
@@ -410,7 +415,6 @@ function ResultsLogic() {
           
           {broadcastSuccess && activeRequest ? (
             
-            /* --- EXCLUSIVE ACTIVE BROADCAST STATE (REPLACES TEXT) --- */
             <div className="animate-in zoom-in slide-in-from-bottom-4">
               <div className="bg-white border-2 border-emerald-500 rounded-[20px] overflow-hidden shadow-lg shadow-emerald-600/10 text-left relative">
                 
@@ -447,7 +451,6 @@ function ResultsLogic() {
                     </div>
                   </div>
 
-                  {/* Dynamic Route Timeline (Splits merged postcodes!) */}
                   <div className="relative pl-6 space-y-4">
                     <div className="absolute left-[11px] top-2 bottom-2 w-0.5 bg-emerald-200 rounded-full"></div>
                     
@@ -469,51 +472,75 @@ function ResultsLogic() {
                   </div>
                 </div>
 
-                <div className="p-4 bg-white relative z-10 border-t border-emerald-50 flex gap-2">
-                   <Link href="/passenger/dashboard" className="flex-1 bg-gray-900 text-white font-black py-4 rounded-xl shadow-md hover:bg-gray-800 transition-colors text-center flex items-center justify-center gap-2">
-                      <LayoutDashboard className="h-4 w-4" /> Dashboard
+                {/* THE UNBLOCKING UI: Search Again is now the Primary Call to Action */}
+                <div className="p-4 bg-white relative z-10 border-t border-emerald-50 flex flex-col gap-3">
+                   <Link href="/search" className="w-full bg-emerald-600 text-white font-black py-4 rounded-xl shadow-md shadow-emerald-600/20 hover:bg-emerald-700 transition-colors text-center flex items-center justify-center gap-2 active:scale-[0.98]">
+                      <Search className="h-5 w-5" /> Search Another Route
                    </Link>
-                   <button 
-                    onClick={cancelActiveRequest}
-                    disabled={actionLoadingId === 'cancel_broadcast'}
-                    className="flex-1 bg-red-50 text-red-600 border-2 border-red-100 font-black py-4 rounded-xl hover:bg-red-100 transition-all flex justify-center items-center gap-2 disabled:opacity-50 active:scale-[0.98]"
-                   >
-                    {actionLoadingId === 'cancel_broadcast' ? <Loader2 className="h-5 w-5 animate-spin" /> : <XCircle className="h-5 w-5" />}
-                    Revoke
-                   </button>
+                   <div className="flex gap-2">
+                     <Link href="/passenger/dashboard" className="flex-1 bg-gray-100 text-gray-700 font-black py-3 rounded-xl hover:bg-gray-200 transition-colors text-center flex items-center justify-center gap-2">
+                        <LayoutDashboard className="h-4 w-4" /> Dashboard
+                     </Link>
+                     <button 
+                      onClick={cancelActiveRequest}
+                      disabled={actionLoadingId === 'cancel_broadcast'}
+                      className="flex-1 bg-red-50 text-red-600 border border-red-100 font-black py-3 rounded-xl hover:bg-red-100 transition-all flex justify-center items-center gap-2 disabled:opacity-50"
+                     >
+                      {actionLoadingId === 'cancel_broadcast' ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />} Revoke
+                     </button>
+                   </div>
                 </div>
               </div>
             </div>
 
           ) : (
             
-            /* --- BROADCAST TO NETWORK STATE --- */
             <div className="animate-in fade-in space-y-6">
               
               <div className="text-center">
                 <div className="mx-auto h-14 w-14 bg-gray-50 rounded-full flex items-center justify-center mb-3 border border-gray-100">
                   <Rss className="h-6 w-6 text-gray-400" />
                 </div>
-                <h3 className="font-black text-gray-900 text-xl tracking-tight">Request to Available Driver's</h3>
+                <h3 className="font-black text-gray-900 text-xl tracking-tight">Request Available Drivers</h3>
                 <p className="text-gray-500 text-sm leading-relaxed mt-1">
-                  No drivers found. Inform your request and drivers will claim it.
+                  No drivers found. Broadcast your route and drivers will claim it.
                 </p>
               </div>
 
+              {/* --- PROFESSIONAL SURGE BOOST UI --- */}
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200 shadow-inner">
-                 <div className="flex justify-between items-end mb-2">
-                   <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Your Offer (Edit to entice drivers)</label>
-                   <span className="text-[10px] font-bold text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded uppercase tracking-widest">For {totalSeatsNeeded}</span>
+                 <div className="flex justify-between items-end mb-3">
+                   <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Driver Incentive</label>
+                   <span className="text-[10px] font-bold text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded uppercase tracking-widest flex items-center gap-1">
+                     <Car className="h-3 w-3" /> Base: £{baseFare.toFixed(2)}
+                   </span>
                  </div>
-                 <div className="flex items-center gap-3 bg-white border border-emerald-200 rounded-xl px-4 py-3 shadow-sm ring-1 ring-emerald-500/10">
-                   <span className="text-2xl font-black text-emerald-600">£</span>
-                   <input
-                     type="number"
-                     step="0.50"
-                     value={customOffer}
-                     onChange={(e) => setCustomOffer(Number(e.target.value))}
-                     className="w-full text-3xl font-black text-gray-900 focus:outline-none"
-                   />
+
+                 {/* Surge Chips */}
+                 <div className="grid grid-cols-3 gap-2 mb-3">
+                   <button 
+                     onClick={() => setCustomOffer(baseFare)} 
+                     className={`py-2.5 rounded-xl text-[11px] sm:text-xs font-black border-2 transition-all ${customOffer === baseFare ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-gray-200 bg-white text-gray-500 hover:border-emerald-200'}`}
+                   >
+                     Standard
+                   </button>
+                   <button 
+                     onClick={() => setCustomOffer(baseFare + 2)} 
+                     className={`py-2.5 rounded-xl text-[11px] sm:text-xs font-black border-2 transition-all flex items-center justify-center gap-1 ${customOffer === baseFare + 2 ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-gray-200 bg-white text-gray-500 hover:border-emerald-200'}`}
+                   >
+                     <Zap className="h-3 w-3" /> + £2 Fast
+                   </button>
+                   <button 
+                     onClick={() => setCustomOffer(baseFare + 5)} 
+                     className={`py-2.5 rounded-xl text-[11px] sm:text-xs font-black border-2 transition-all flex items-center justify-center gap-1 ${customOffer === baseFare + 5 ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-gray-200 bg-white text-gray-500 hover:border-emerald-200'}`}
+                   >
+                     <Zap className="h-3 w-3" /> + £5 Urgent
+                   </button>
+                 </div>
+
+                 <div className="flex items-center justify-between bg-white border border-emerald-200 rounded-xl px-4 py-3 shadow-sm ring-1 ring-emerald-500/10">
+                   <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Total Offer</span>
+                   <span className="text-3xl font-black text-emerald-600">£{customOffer.toFixed(2)}</span>
                  </div>
               </div>
 
@@ -598,7 +625,6 @@ function ResultsLogic() {
           
           {rides.map((ride) => {
             const rideStatus = userRideStatuses[String(ride.id)];
-            const isLockedOut = hasConfirmedShift && rideStatus !== 'confirmed';
 
             return (
               <div key={ride.id} className={`bg-white rounded-[24px] shadow-sm transition-all overflow-hidden animate-in slide-in-from-bottom-4 relative ${rideStatus === 'confirmed' ? 'border-2 border-emerald-500' : 'border-2 border-gray-100 hover:border-emerald-200'}`}>
@@ -650,7 +676,7 @@ function ResultsLogic() {
                     <button onClick={() => handleCancelRequest(ride.id)} disabled={actionLoadingId === ride.id} className="w-full bg-red-50 text-red-600 border-2 border-red-200 py-4 rounded-xl font-black flex items-center justify-center gap-2 hover:bg-red-100 transition-colors disabled:opacity-70 active:scale-[0.98] shadow-sm">
                       {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <XCircle className="h-5 w-5" />} Cancel Request
                     </button>
-                  ) : isLockedOut ? (
+                  ) : hasConfirmedShift ? (
                     <button disabled className="w-full bg-gray-100 text-gray-400 py-4 rounded-xl font-black flex items-center justify-center gap-2 transition-colors">
                       <Lock className="h-5 w-5" /> Shift Already Booked
                     </button>
