@@ -51,11 +51,9 @@ function ResultsLogic() {
   const [loading, setLoading] = useState(true);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   
-  // --- UPGRADED BROADCAST STATES ---
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
   const [activeRequest, setActiveRequest] = useState<any | null>(null); 
   
-  // --- SURGE BOOST PRICING STATE ---
   const [baseFare, setBaseFare] = useState<number>(0);
   const [customOffer, setCustomOffer] = useState<number>(0);
   
@@ -65,6 +63,7 @@ function ResultsLogic() {
 
   const [userRideStatuses, setUserRideStatuses] = useState<Record<string, string>>({});
   const [hasConfirmedShift, setHasConfirmedShift] = useState(false); 
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const friendsList = friendsParam ? friendsParam.split(',') : [];
   const totalSeatsNeeded = 1 + friendsList.length;
@@ -81,7 +80,6 @@ function ResultsLogic() {
     let pickupLng = lng;
 
     try {
-      // 1. PRICING ENGINE 
       const { data: workplaceData } = await supabase
         .from('workplaces')
         .select('*')
@@ -126,20 +124,23 @@ function ResultsLogic() {
         }
       }
 
-      // Initialize the Base Fare for Surge Buttons
       setBaseFare(finalCalculatedFare);
       setCustomOffer(finalCalculatedFare);
 
-      // 2. FETCH OPEN REQUESTS
+      // RELATIONAL QUERY: Fetch Open Requests AND their Child Passengers
       const { data: openReqs } = await supabase
         .from('open_requests')
-        .select('*')
+        .select(`
+          *,
+          pool_passengers (
+            id, passenger_id, pickup_postcode, seats, price
+          )
+        `)
         .ilike('destination_hub', `%${to.trim()}%`)
         .eq('ride_date', date)
         .eq('shift_type', shift)
         .eq('status', 'open');
 
-      // 3. FETCH AVAILABLE DRIVERS
       const { data: ridesData } = await supabase
         .from('rides')
         .select('*')
@@ -158,10 +159,10 @@ function ResultsLogic() {
         setRides(pricedRides);
       }
 
-      // 4. CHECK USER AUTH & EXISTING BROADCASTS
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setIsLoggedIn(true);
+        setCurrentUserId(user.id);
 
         const { data: matches } = await supabase
           .from('trip_matches')
@@ -183,17 +184,22 @@ function ResultsLogic() {
         }
 
         if (openReqs) {
-          const userExistingReq = openReqs.find(req => req.passenger_id === user.id);
+          // RELATIONAL CHECK: Look inside the children to see if the user is in this pool!
+          const userExistingReq = openReqs.find(req => 
+            req.pool_passengers && req.pool_passengers.some((p: any) => p.passenger_id === user.id)
+          );
           
           if (userExistingReq) {
+             const myPassengerRecord = userExistingReq.pool_passengers.find((p:any) => p.passenger_id === user.id);
              setBroadcastSuccess(true);
              setActiveRequest(userExistingReq); 
-             setCustomOffer(userExistingReq.calculated_price);
+             if (myPassengerRecord) setCustomOffer(myPassengerRecord.price);
           }
 
           const validPools = openReqs.filter(req => 
+            req.destination_hub.toLowerCase().includes(to.toLowerCase().trim()) &&
             (req.seats_needed + totalSeatsNeeded) <= 4 && 
-            req.passenger_id !== user.id
+            (!req.pool_passengers || !req.pool_passengers.some((p: any) => p.passenger_id === user.id))
           );
           setExistingBroadcasts(validPools);
         }
@@ -201,7 +207,10 @@ function ResultsLogic() {
       } else {
         setIsLoggedIn(false);
         if (openReqs) {
-          const validPools = openReqs.filter(req => (req.seats_needed + totalSeatsNeeded) <= 4);
+          const validPools = openReqs.filter(req => 
+            req.destination_hub.toLowerCase().includes(to.toLowerCase().trim()) &&
+            (req.seats_needed + totalSeatsNeeded) <= 4
+          );
           setExistingBroadcasts(validPools);
         }
       }
@@ -252,29 +261,31 @@ function ResultsLogic() {
   const handleJoinBroadcast = async (req: any) => {
     if (!isLoggedIn) return setShowLoginModal(true);
     setActionLoadingId(req.id);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
     
     const newSeats = req.seats_needed + totalSeatsNeeded;
     const newPrice = req.calculated_price + customOffer; 
-    
-    const mergedPickups = `${req.pickup_postcode} | ${getUnifiedPickupString()}`;
 
-    const { error } = await supabase
+    // 1. Update the Parent Pool Totals
+    const { error: parentError } = await supabase
       .from('open_requests')
-      .update({
-        seats_needed: newSeats,
-        calculated_price: newPrice,
-        pickup_postcode: mergedPickups 
-      })
+      .update({ seats_needed: newSeats, calculated_price: newPrice })
       .eq('id', req.id);
 
-    if (!error) {
-      setBroadcastSuccess(true);
-      setActiveRequest({
-        ...req,
-        seats_needed: newSeats,
-        calculated_price: newPrice,
-        pickup_postcode: mergedPickups
-      });
+    // 2. Insert the Child Passenger Record
+    const { error: childError } = await supabase
+      .from('pool_passengers')
+      .insert([{
+        request_id: req.id,
+        passenger_id: user.id,
+        pickup_postcode: getUnifiedPickupString(),
+        seats: totalSeatsNeeded,
+        price: customOffer
+      }]);
+
+    if (!parentError && !childError) {
+      await fetchRidesAndAuth(); // Refresh UI instantly
     } else {
       alert("Failed to join request.");
     }
@@ -288,21 +299,28 @@ function ResultsLogic() {
     if (!user) return;
 
     try {
-      const { data, error } = await supabase.from('open_requests').insert([{
-        passenger_id: user.id,
-        pickup_postcode: getUnifiedPickupString(),
+      // 1. Create the Parent Pool
+      const { data: parentPool, error: parentError } = await supabase.from('open_requests').insert([{
         destination_hub: to,
-        pickup_latitude: lat,
-        pickup_longitude: lng,
         ride_date: date,
         shift_type: shift,
         seats_needed: totalSeatsNeeded,
         calculated_price: customOffer 
       }]).select().single();
 
-      if (!error && data) {
-        setBroadcastSuccess(true);
-        setActiveRequest(data); 
+      // 2. Add the Creator to the Children Table
+      if (!parentError && parentPool) {
+        const { error: childError } = await supabase.from('pool_passengers').insert([{
+          request_id: parentPool.id,
+          passenger_id: user.id,
+          pickup_postcode: getUnifiedPickupString(),
+          seats: totalSeatsNeeded,
+          price: customOffer
+        }]);
+
+        if (!childError) {
+          await fetchRidesAndAuth(); // Refresh UI instantly
+        }
       } else {
         alert("Failed to broadcast request.");
       }
@@ -313,21 +331,35 @@ function ResultsLogic() {
   };
 
   const cancelActiveRequest = async () => {
-    if (!activeRequest) return;
+    if (!activeRequest || !currentUserId) return;
     setActionLoadingId('cancel_broadcast');
     
-    const { error } = await supabase
-      .from('open_requests')
-      .delete()
-      .eq('id', activeRequest.id);
-
-    if (!error) {
-      setBroadcastSuccess(false);
-      setActiveRequest(null);
-    } else {
-      alert("Could not cancel request. Please try again.");
+    // Find this specific passenger's child record
+    const myRecord = activeRequest.pool_passengers.find((p: any) => p.passenger_id === currentUserId);
+    
+    if (myRecord) {
+       const remainingSeats = activeRequest.seats_needed - myRecord.seats;
+       
+       if (remainingSeats <= 0) {
+          // If you were the only passenger, delete the entire pool!
+          await supabase.from('open_requests').delete().eq('id', activeRequest.id);
+       } else {
+          // If others are in the pool, safely subtract your contribution and leave the pool active!
+          await supabase.from('open_requests').update({
+             seats_needed: remainingSeats,
+             calculated_price: activeRequest.calculated_price - myRecord.price
+          }).eq('id', activeRequest.id);
+          
+          await supabase.from('pool_passengers').delete().eq('id', myRecord.id);
+       }
     }
+
+    setBroadcastSuccess(false);
+    setActiveRequest(null);
     setActionLoadingId(null);
+    
+    // Refresh to show drivers or other pools again
+    await fetchRidesAndAuth();
   };
 
   const handleCancelRequest = async (rideId: string) => {
@@ -434,8 +466,8 @@ function ResultsLogic() {
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Offered Fare</p>
-                    <p className="font-black text-2xl text-emerald-600 leading-none">£{activeRequest.calculated_price.toFixed(2)}</p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Your Fare</p>
+                    <p className="font-black text-2xl text-emerald-600 leading-none">£{customOffer.toFixed(2)}</p>
                   </div>
                 </div>
 
@@ -456,10 +488,20 @@ function ResultsLogic() {
                     
                     <div className="relative">
                       <div className="absolute -left-6 top-1 h-3 w-3 bg-emerald-500 rounded-full border-2 border-emerald-50 shadow-sm"></div>
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Pickups ({activeRequest.seats_needed} Seats)</p>
-                      <div className="flex flex-col gap-1.5">
-                        {activeRequest.pickup_postcode.split('|').map((loc: string, i: number) => (
-                          <span key={i} className="text-sm font-bold text-gray-900 leading-tight">{loc.trim()}</span>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Pickups ({activeRequest.seats_needed} Total Seats)</p>
+                      <div className="flex flex-col gap-2">
+                        {activeRequest.pool_passengers?.map((passenger: any, i: number) => (
+                          <div key={i} className="flex items-center gap-2">
+                            <span className="text-sm font-black text-gray-900 leading-tight bg-white px-2 py-0.5 rounded shadow-sm border border-gray-100">
+                              {passenger.pickup_postcode.trim()}
+                            </span>
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
+                              {passenger.seats} Seat(s)
+                            </span>
+                            {passenger.passenger_id === currentUserId && (
+                               <span className="text-[10px] font-black text-white bg-emerald-500 px-1.5 py-0.5 rounded">YOU</span>
+                            )}
+                          </div>
                         ))}
                       </div>
                     </div>
@@ -472,7 +514,6 @@ function ResultsLogic() {
                   </div>
                 </div>
 
-                {/* THE UNBLOCKING UI: Search Again is now the Primary Call to Action */}
                 <div className="p-4 bg-white relative z-10 border-t border-emerald-50 flex flex-col gap-3">
                    <Link href="/search" className="w-full bg-emerald-600 text-white font-black py-4 rounded-xl shadow-md shadow-emerald-600/20 hover:bg-emerald-700 transition-colors text-center flex items-center justify-center gap-2 active:scale-[0.98]">
                       <Search className="h-5 w-5" /> Search Another Route
@@ -507,7 +548,6 @@ function ResultsLogic() {
                 </p>
               </div>
 
-              {/* --- PROFESSIONAL SURGE BOOST UI --- */}
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200 shadow-inner">
                  <div className="flex justify-between items-end mb-3">
                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Driver Incentive</label>
@@ -516,7 +556,6 @@ function ResultsLogic() {
                    </span>
                  </div>
 
-                 {/* Surge Chips */}
                  <div className="grid grid-cols-3 gap-2 mb-3">
                    <button 
                      onClick={() => setCustomOffer(baseFare)} 
@@ -539,7 +578,7 @@ function ResultsLogic() {
                  </div>
 
                  <div className="flex items-center justify-between bg-white border border-emerald-200 rounded-xl px-4 py-3 shadow-sm ring-1 ring-emerald-500/10">
-                   <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Total Offer</span>
+                   <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Your Offer</span>
                    <span className="text-3xl font-black text-emerald-600">£{customOffer.toFixed(2)}</span>
                  </div>
               </div>
@@ -562,7 +601,6 @@ function ResultsLogic() {
                   {existingBroadcasts.map(req => {
                     const currentPassengers = req.seats_needed;
                     const spotsLeft = 4 - currentPassengers;
-                    const allPickups = req.pickup_postcode.split('|');
 
                     return (
                       <div key={req.id} className="bg-white border-2 border-gray-100 hover:border-emerald-200 rounded-2xl overflow-hidden shadow-sm transition-all text-left">
@@ -583,10 +621,17 @@ function ResultsLogic() {
                             
                             <div className="relative">
                               <div className="absolute -left-6 top-1 h-3 w-3 bg-emerald-500 rounded-full border-2 border-white shadow-sm ring-1 ring-emerald-500/20"></div>
-                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Current Pickups</p>
-                              <div className="flex flex-col gap-1">
-                                {allPickups.map((loc: string, i: number) => (
-                                  <span key={i} className="text-sm font-bold text-gray-900 leading-tight">{loc.trim()}</span>
+                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Current Pickups</p>
+                              <div className="flex flex-col gap-2">
+                                {req.pool_passengers?.map((passenger: any, i: number) => (
+                                  <div key={i} className="flex items-center gap-2">
+                                    <span className="text-sm font-black text-gray-900 leading-tight bg-white px-2 py-0.5 rounded shadow-sm border border-gray-100">
+                                      {passenger.pickup_postcode.trim()}
+                                    </span>
+                                    <span className="text-[10px] font-bold text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                                      {passenger.seats} Seat(s)
+                                    </span>
+                                  </div>
                                 ))}
                               </div>
                             </div>
