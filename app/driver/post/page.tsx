@@ -36,6 +36,10 @@ export default function PostRidePage() {
   const router = useRouter();
   const dateInputRef = React.useRef<HTMLInputElement>(null);
 
+  // --- THE TIMEZONE FIX: Strictly managed in local state ---
+  const [todayStr, setTodayStr] = React.useState("");
+  const [tomorrowStr, setTomorrowStr] = React.useState("");
+
   // --- FORM STATE ---
   const [loading, setLoading] = React.useState(false);
   const [fromPostcode, setFromPostcode] = React.useState("");
@@ -46,13 +50,28 @@ export default function PostRidePage() {
   const [shift, setShift] = React.useState("6AM - 2PM");
   const [seats, setSeats] = React.useState(4);
 
-  // Custom Time Modal State
   const [showTimeModal, setShowTimeModal] = React.useState(false);
   const [timeStep, setTimeStep] = React.useState<'start' | 'end'>('start');
   const [customStart, setCustomStart] = React.useState({ h: "06", m: "00", p: "AM" });
   const [customEnd, setCustomEnd] = React.useState({ h: "02", m: "00", p: "PM" });
 
-  // --- HANDLERS ---
+  React.useEffect(() => {
+    // This runs strictly on the client browser, guaranteeing the correct UK timezone
+    const getLocalFormatted = (d: Date) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    const now = new Date();
+    setTodayStr(getLocalFormatted(now));
+
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    setTomorrowStr(getLocalFormatted(tomorrow));
+  }, []);
+
   const formatPostcode = (value: string) => {
     let val = value.toUpperCase().replace(/[^A-Z0-9]/g, ''); 
     if (val.length > 7) val = val.slice(0, 7); 
@@ -70,27 +89,26 @@ export default function PostRidePage() {
     if (!user) return router.push("/driver/login");
 
     let finalDate = customDate;
-    if (dateSelection === 'today') finalDate = new Date().toISOString().split('T')[0];
-    if (dateSelection === 'tomorrow') {
-      const tmrw = new Date();
-      tmrw.setDate(tmrw.getDate() + 1);
-      finalDate = tmrw.toISOString().split('T')[0];
-    }
+    if (dateSelection === 'today') finalDate = todayStr;
+    if (dateSelection === 'tomorrow') finalDate = tomorrowStr;
 
-    const departureTime = shift === "Custom" ? `${customStart.h}:${customStart.m} ${customStart.p}` : shift.split(" - ")[0];
+    const departureTime = shift === "Custom" 
+      ? `${customStart.h}:${customStart.m} ${customStart.p} - ${customEnd.h}:${customEnd.m} ${customEnd.p}` 
+      : shift;
 
     const { error } = await supabase.from('rides').insert([{
       driver_id: user.id,
-      driver_name: user.user_metadata.first_name,
+      driver_name: user.user_metadata?.first_name || "Verified Driver",
       start_postcode: fromPostcode,
       destination_hub: destinationHub,
       ride_date: finalDate,
-      departure_time: departureTime,
+      departure_time: departureTime, 
+      shift_type: departureTime,
       trip_type: tripType,
-      total_seats: seats,
+      total_seats_capacity: seats, 
       remaining_seats: seats,
       status: 'active',
-      vehicle: user.user_metadata.car_model || "Vehicle"
+      vehicle: user.user_metadata?.car_model || "Standard Car"
     }]);
 
     if (error) {
@@ -115,7 +133,6 @@ export default function PostRidePage() {
       </header>
 
       <main className="max-w-md mx-auto px-4 py-6 space-y-6">
-        {/* LOGO AREA */}
         <div className="text-center py-2">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-600 shadow-lg mx-auto mb-3">
             <Car className="h-6 w-6 text-white" />
@@ -125,7 +142,6 @@ export default function PostRidePage() {
 
         <form onSubmit={handlePostRide} className="rounded-[32px] border border-gray-200 bg-white p-6 shadow-sm space-y-6">
           
-          {/* 1. ROUTE */}
           <div className="space-y-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Starting From</label>
@@ -146,7 +162,6 @@ export default function PostRidePage() {
 
           <div className="h-px w-full bg-gray-100" />
 
-          {/* 2. DATE SELECTION (Same as Passenger) */}
           <div className="space-y-3">
             <label className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Travel Date</label>
             <div className="flex gap-2">
@@ -158,11 +173,10 @@ export default function PostRidePage() {
                 <Calendar className="h-5 w-5" />
                 <span>{dateSelection === 'custom' && customDate ? new Date(customDate).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long' }) : 'Choose from calendar'}</span>
               </button>
-              <input ref={dateInputRef} type="date" min={new Date().toISOString().split('T')[0]} value={customDate} onChange={(e) => { if (e.target.value) { setCustomDate(e.target.value); setDateSelection('custom'); } }} className="absolute inset-0 w-full h-full opacity-0 pointer-events-none" />
+              <input ref={dateInputRef} type="date" min={todayStr} value={customDate} onChange={(e) => { if (e.target.value) { setCustomDate(e.target.value); setDateSelection('custom'); } }} className="absolute inset-0 w-full h-full opacity-0 pointer-events-none" />
             </div>
           </div>
 
-          {/* 3. TRIP TYPE */}
           <div className="space-y-2">
              <label className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Trip Type</label>
              <div className="flex rounded-xl bg-gray-100 p-1">
@@ -171,7 +185,6 @@ export default function PostRidePage() {
              </div>
           </div>
 
-          {/* 4. SHIFT (Mini Buttons) */}
           <div className="space-y-3">
             <label className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Shift Timing</label>
             <div className="flex flex-wrap gap-2">
@@ -181,7 +194,6 @@ export default function PostRidePage() {
             </div>
           </div>
 
-          {/* 5. CAPACITY */}
           <div className="space-y-3">
             <label className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Available Seats</label>
             <div className="flex items-center justify-between bg-gray-50 p-4 rounded-2xl border border-gray-200">
@@ -194,13 +206,12 @@ export default function PostRidePage() {
             </div>
           </div>
 
-          <button type="submit" disabled={loading} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black text-lg shadow-xl shadow-emerald-600/20 transition-all active:scale-[0.98] disabled:opacity-50">
+          <button type="submit" disabled={loading || !todayStr} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black text-lg shadow-xl shadow-emerald-600/20 transition-all active:scale-[0.98] disabled:opacity-50">
             {loading ? <Loader2 className="h-6 w-6 animate-spin mx-auto" /> : "Post Ride Now"}
           </button>
         </form>
       </main>
 
-      {/* --- TIME MODAL (Same logic as Search) --- */}
       {showTimeModal && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-gray-900/40 backdrop-blur-sm sm:items-center p-0 sm:p-4">
           <div className="bg-white w-full max-w-md rounded-t-[40px] sm:rounded-[32px] p-8 pb-12 sm:pb-8 shadow-2xl animate-in slide-in-from-bottom-10">
@@ -210,7 +221,6 @@ export default function PostRidePage() {
             </div>
             
             <div className="flex gap-4 justify-center items-center bg-gray-50 p-6 rounded-[32px] border border-gray-100 mb-8 h-48 relative overflow-hidden">
-               {/* Simplified scroll logic for brevity - use the same scroller as search */}
                <div className="text-3xl font-black text-emerald-600">
                   {timeStep === 'start' ? `${customStart.h}:${customStart.m} ${customStart.p}` : `${customEnd.h}:${customEnd.m} ${customEnd.p}`}
                </div>

@@ -127,7 +127,58 @@ function ResultsLogic() {
       setBaseFare(finalCalculatedFare);
       setCustomOffer(finalCalculatedFare);
 
-      // RELATIONAL QUERY: Fetch Open Requests AND their Child Passengers
+      // 1. FETCH USER AUTH & MATCHES FIRST (To prevent the "Full Car" bug)
+      const { data: { user } } = await supabase.auth.getUser();
+      const statusMap: Record<string, string> = {};
+      let isConfirmed = false;
+
+      if (user) {
+        setIsLoggedIn(true);
+        setCurrentUserId(user.id);
+
+        const { data: matches } = await supabase
+          .from('trip_matches')
+          .select(`ride_id, match_status, rides!inner(ride_date, departure_time)`)
+          .eq('passenger_id', user.id)
+          .in('match_status', ['pending', 'confirmed'])
+          .eq('rides.ride_date', date);
+        
+        if (matches && matches.length > 0) {
+          matches.forEach((m: any) => {
+            statusMap[String(m.ride_id)] = m.match_status;
+            if (m.match_status === 'confirmed') isConfirmed = true; 
+          });
+          setUserRideStatuses(statusMap);
+          setHasConfirmedShift(isConfirmed); 
+        }
+      } else {
+        setIsLoggedIn(false);
+      }
+
+      // 2. FETCH ACTIVE DRIVERS (STRICT SHIFT MATCH)
+      const { data: allRidesData } = await supabase
+        .from('rides')
+        .select('*')
+        .eq('status', 'active')
+        .eq('ride_date', date)
+        .eq('departure_time', shift) // EXACT match restored
+        .ilike('destination_hub', `%${to.trim()}%`);
+
+      if (allRidesData) {
+        // SMART FILTER: Show the ride IF it has enough seats OR if the user is already matched to it!
+        const validRides = allRidesData.filter(ride => 
+          ride.remaining_seats >= totalSeatsNeeded || !!statusMap[String(ride.id)]
+        );
+
+        const pricedRides = validRides.map(ride => ({
+          ...ride,
+          dynamic_price: finalCalculatedFare,
+          pricing_method: pricingMethod
+        }));
+        setRides(pricedRides);
+      }
+
+      // 3. FETCH OPEN REQUESTS / POOLS (STRICT SHIFT MATCH)
       const { data: openReqs } = await supabase
         .from('open_requests')
         .select(`
@@ -138,53 +189,11 @@ function ResultsLogic() {
         `)
         .ilike('destination_hub', `%${to.trim()}%`)
         .eq('ride_date', date)
-        .eq('shift_type', shift)
+        .eq('shift_type', shift) // EXACT match restored
         .eq('status', 'open');
 
-      const { data: ridesData } = await supabase
-        .from('rides')
-        .select('*')
-        .eq('status', 'active')
-        .gte('remaining_seats', totalSeatsNeeded)
-        .eq('ride_date', date)
-        .eq('departure_time', shift)
-        .ilike('destination_hub', `%${to}%`);
-
-      if (ridesData) {
-        const pricedRides = ridesData.map(ride => ({
-          ...ride,
-          dynamic_price: finalCalculatedFare,
-          pricing_method: pricingMethod
-        }));
-        setRides(pricedRides);
-      }
-
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setIsLoggedIn(true);
-        setCurrentUserId(user.id);
-
-        const { data: matches } = await supabase
-          .from('trip_matches')
-          .select(`ride_id, match_status, rides!inner(ride_date, departure_time)`)
-          .eq('passenger_id', user.id)
-          .in('match_status', ['pending', 'confirmed'])
-          .eq('rides.ride_date', date)
-          .eq('rides.departure_time', shift);
-        
-        if (matches && matches.length > 0) {
-          const statusMap: Record<string, string> = {};
-          let isConfirmed = false;
-          matches.forEach((m: any) => {
-            statusMap[String(m.ride_id)] = m.match_status;
-            if (m.match_status === 'confirmed') isConfirmed = true; 
-          });
-          setUserRideStatuses(statusMap);
-          setHasConfirmedShift(isConfirmed); 
-        }
-
-        if (openReqs) {
-          // RELATIONAL CHECK: Look inside the children to see if the user is in this pool!
+      if (openReqs) {
+        if (user) {
           const userExistingReq = openReqs.find(req => 
             req.pool_passengers && req.pool_passengers.some((p: any) => p.passenger_id === user.id)
           );
@@ -197,20 +206,12 @@ function ResultsLogic() {
           }
 
           const validPools = openReqs.filter(req => 
-            req.destination_hub.toLowerCase().includes(to.toLowerCase().trim()) &&
             (req.seats_needed + totalSeatsNeeded) <= 4 && 
             (!req.pool_passengers || !req.pool_passengers.some((p: any) => p.passenger_id === user.id))
           );
           setExistingBroadcasts(validPools);
-        }
-
-      } else {
-        setIsLoggedIn(false);
-        if (openReqs) {
-          const validPools = openReqs.filter(req => 
-            req.destination_hub.toLowerCase().includes(to.toLowerCase().trim()) &&
-            (req.seats_needed + totalSeatsNeeded) <= 4
-          );
+        } else {
+          const validPools = openReqs.filter(req => (req.seats_needed + totalSeatsNeeded) <= 4);
           setExistingBroadcasts(validPools);
         }
       }
@@ -267,13 +268,11 @@ function ResultsLogic() {
     const newSeats = req.seats_needed + totalSeatsNeeded;
     const newPrice = req.calculated_price + customOffer; 
 
-    // 1. Update the Parent Pool Totals
     const { error: parentError } = await supabase
       .from('open_requests')
       .update({ seats_needed: newSeats, calculated_price: newPrice })
       .eq('id', req.id);
 
-    // 2. Insert the Child Passenger Record
     const { error: childError } = await supabase
       .from('pool_passengers')
       .insert([{
@@ -285,25 +284,25 @@ function ResultsLogic() {
       }]);
 
     if (!parentError && !childError) {
-      await fetchRidesAndAuth(); // Refresh UI instantly
+      await fetchRidesAndAuth(); 
     } else {
       alert("Failed to join request.");
     }
     setActionLoadingId(null);
   };
-const handleBroadcast = async () => {
+
+  const handleBroadcast = async () => {
     if (!isLoggedIn) return setShowLoginModal(true);
     setActionLoadingId('broadcast');
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     try {
-      // 1. Create the Parent Pool (Added the required text cache fields back!)
       const { data: parentPool, error: parentError } = await supabase.from('open_requests').insert([{
-        passenger_id: user.id,                      // REQUIRED CACHE FIELD
-        pickup_postcode: getUnifiedPickupString(),  // REQUIRED CACHE FIELD
-        pickup_latitude: lat,                       // REQUIRED CACHE FIELD
-        pickup_longitude: lng,                      // REQUIRED CACHE FIELD
+        passenger_id: user.id,                      
+        pickup_postcode: getUnifiedPickupString(),  
+        pickup_latitude: lat,                       
+        pickup_longitude: lng,                      
         destination_hub: to,
         ride_date: date,
         shift_type: shift,
@@ -311,7 +310,6 @@ const handleBroadcast = async () => {
         calculated_price: customOffer 
       }]).select().single();
 
-      // 2. Add the Creator to the Relational Children Table
       if (!parentError && parentPool) {
         const { error: childError } = await supabase.from('pool_passengers').insert([{
           request_id: parentPool.id,
@@ -322,7 +320,7 @@ const handleBroadcast = async () => {
         }]);
 
         if (!childError) {
-          await fetchRidesAndAuth(); // Refresh UI instantly
+          await fetchRidesAndAuth(); 
         } else {
           console.error("Child Insert Error:", childError);
         }
@@ -340,17 +338,14 @@ const handleBroadcast = async () => {
     if (!activeRequest || !currentUserId) return;
     setActionLoadingId('cancel_broadcast');
     
-    // Find this specific passenger's child record
     const myRecord = activeRequest.pool_passengers.find((p: any) => p.passenger_id === currentUserId);
     
     if (myRecord) {
        const remainingSeats = activeRequest.seats_needed - myRecord.seats;
        
        if (remainingSeats <= 0) {
-          // If you were the only passenger, delete the entire pool!
           await supabase.from('open_requests').delete().eq('id', activeRequest.id);
        } else {
-          // If others are in the pool, safely subtract your contribution and leave the pool active!
           await supabase.from('open_requests').update({
              seats_needed: remainingSeats,
              calculated_price: activeRequest.calculated_price - myRecord.price
@@ -363,8 +358,6 @@ const handleBroadcast = async () => {
     setBroadcastSuccess(false);
     setActiveRequest(null);
     setActionLoadingId(null);
-    
-    // Refresh to show drivers or other pools again
     await fetchRidesAndAuth();
   };
 

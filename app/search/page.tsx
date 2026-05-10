@@ -73,7 +73,13 @@ const checkOverlap = (shift1: string, shift2: string) => {
   return Math.max(s1.start, s2.start) < Math.min(s1.end, s2.end);
 };
 
-const getFormattedDate = (date: Date) => date.toISOString().split('T')[0];
+// THE FIX: Forces Local Timezone formatting to prevent UTC day-shifting!
+const getFormattedDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 export default function SearchPage() {
   const router = useRouter(); 
@@ -130,7 +136,6 @@ export default function SearchPage() {
           setFromLng(profile.home_longitude);
         }
 
-        // RELATIONAL QUERY: Fetch Open Requests AND Pool Passengers
         const { data: openReqs } = await supabase
           .from('open_requests')
           .select(`
@@ -142,7 +147,6 @@ export default function SearchPage() {
           .eq('status', 'open');
         
         if (openReqs && openReqs.length > 0) {
-          // Filter to only show requests where THIS user is one of the passengers
           const myActiveReqs = openReqs.filter(req => 
             req.pool_passengers && req.pool_passengers.some((p: any) => p.passenger_id === user.id)
           );
@@ -174,7 +178,6 @@ export default function SearchPage() {
     setFriends(friends.filter(f => f.id !== id));
   };
 
-  // SMART RELATIONAL CANCEL: Safely removes user without destroying other passengers' bookings
   const cancelActiveRequest = async (reqId: string) => {
     setCancellingId(reqId);
     
@@ -187,10 +190,8 @@ export default function SearchPage() {
        const remainingSeats = reqToCancel.seats_needed - myRecord.seats;
        
        if (remainingSeats <= 0) {
-          // Entire pool is empty, delete it
           await supabase.from('open_requests').delete().eq('id', reqToCancel.id);
        } else {
-          // Just remove my contribution and leave the pool running for others
           await supabase.from('open_requests').update({
              seats_needed: remainingSeats,
              calculated_price: reqToCancel.calculated_price - myRecord.price
@@ -413,7 +414,6 @@ export default function SearchPage() {
                         </div>
                       </div>
 
-                      {/* --- ADVANCED RELATIONAL PICKUP TIMELINE UI --- */}
                       <div className="relative pl-6 space-y-3">
                         <div className="absolute left-[11px] top-2 bottom-2 w-0.5 bg-emerald-200 rounded-full"></div>
                         <div className="relative">

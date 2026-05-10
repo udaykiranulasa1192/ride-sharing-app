@@ -29,11 +29,19 @@ export default function JobsBoard() {
   async function fetchAndBundleJobs() {
     setLoading(true);
 
-    // 1. Fetch ALL open requests (the jobs board)
-    const { data: requests } = await supabase
+    // 1. RELATIONAL QUERY: Fetch the Master Pools AND their Child Passengers
+    const { data: requests, error } = await supabase
       .from('open_requests')
-      .select('*')
+      .select(`
+        *,
+        pool_passengers (
+          id, passenger_id, pickup_postcode, seats, price
+        )
+      `)
+      .eq('status', 'open')
       .order('ride_date', { ascending: true });
+
+    if (error) console.error("Error fetching jobs:", error);
 
     if (!requests || requests.length === 0) {
       setBundles([]);
@@ -41,56 +49,46 @@ export default function JobsBoard() {
       return;
     }
 
-    // 2. Fetch Passenger Profiles so we have their names
-    const passengerIds = [...new Set(requests.map(r => r.passenger_id))];
+    // 2. Extract ALL unique passenger IDs from every pool's children
+    const passengerIds = new Set<string>();
+    requests.forEach(req => {
+      if (req.pool_passengers) {
+        req.pool_passengers.forEach((p: any) => passengerIds.add(p.passenger_id));
+      }
+    });
+
+    // 3. Fetch Passenger Profiles for the manifest
     const { data: profilesData } = await supabase
       .from('passenger_profiles')
       .select('id, first_name, last_name')
-      .in('id', passengerIds);
+      .in('id', Array.from(passengerIds));
 
     const pMap: Record<string, any> = {};
     profilesData?.forEach(p => { pMap[p.id] = p; });
 
-    // 3. THE SMART BUNDLE ALGORITHM
-    const bundleMap: Record<string, any> = {};
-
-requests.forEach(req => {
-      const key = `${req.destination_hub}_${req.ride_date}_${req.shift_type}_${req.trip_type}`;
-      
-      if (!bundleMap[key]) {
-        bundleMap[key] = {
-          id: key,
-          hub: req.destination_hub,
-          date: req.ride_date,
-          time: req.shift_type,
-          // THE FIX: Changed the fallback to 'two_way'
-          tripType: req.trip_type || 'two_way', 
-          passengers: [],
-          totalSeats: 0,
-          totalEarnings: 0
-        };
-      }
-
-      // Check if we can fit them in a standard 4-seater car!
-      if (bundleMap[key].totalSeats + req.seats_needed <= 4) {
-        bundleMap[key].passengers.push({
-          ...req,
-          profile: pMap[req.passenger_id] || { first_name: 'Unknown', last_name: 'User' }
-        });
-        bundleMap[key].totalSeats += req.seats_needed;
-        bundleMap[key].totalEarnings += Number(req.calculated_price || 0);
-      }
-    });
-
-    // Convert map to an array and sort by Highest Earnings first!
-    const finalBundles = Object.values(bundleMap)
-      .filter(b => b.passengers.length > 0)
-      .sort((a, b) => b.totalEarnings - a.totalEarnings);
+    // 4. THE SMART FORMATTER: The database already bundled them, we just map it for the UI!
+    const finalBundles = requests.map(req => {
+      return {
+        id: req.id,
+        hub: req.destination_hub,
+        date: req.ride_date,
+        time: req.shift_type,
+        tripType: req.trip_type || 'two_way',
+        totalSeats: req.seats_needed,
+        totalEarnings: Number(req.calculated_price || 0),
+        pickupString: req.pickup_postcode, // Used to extract outward code
+        passengers: (req.pool_passengers || []).map((p: any) => ({
+          ...p,
+          profile: pMap[p.passenger_id] || { first_name: 'Unknown', last_name: 'User' }
+        }))
+      };
+    }).filter(pool => pool.passengers.length > 0) // Only show pools that actually have passengers
+      .sort((a, b) => b.totalEarnings - a.totalEarnings); // Sort highest paying jobs to the top
 
     setBundles(finalBundles);
     setLoading(false);
   }
-// --- ONE-CLICK ROUTE CREATION ---
+
   // --- ONE-CLICK ROUTE CREATION ---
   const handleAcceptBundle = async (bundle: any) => {
     setProcessingId(bundle.id);
@@ -114,13 +112,11 @@ requests.forEach(req => {
 
       const averagePrice = parseFloat((bundle.totalEarnings / bundle.totalSeats).toFixed(2));
 
-      // --- THE FIX: Extract the Outward Code ---
-      // We grab the first passenger's postcode (e.g., "CF14 2QR") and split by space to get "CF14"
-      const firstPassengerPostcode = bundle.passengers[0].pickup_postcode || "";
+      // Extract Outward Code (e.g., "CF14 2QR" -> "CF14")
+      const firstPassengerPostcode = bundle.pickupString || "";
       const outwardCode = firstPassengerPostcode.trim().split(' ')[0].toUpperCase();
 
-// 1. Create a NEW RIDE for the driver based on this bundle
-      // 1. Create a NEW RIDE for the driver based on this bundle
+      // 1. Create a NEW RIDE for the driver
       const { data: newRide, error: rideError } = await supabase.from('rides').insert([{
         driver_id: user.id,
         driver_name: driverFullName,
@@ -128,7 +124,7 @@ requests.forEach(req => {
         ride_date: bundle.date,
         departure_time: bundle.time,
         shift_type: bundle.time,      
-        trip_type: bundle.tripType || 'two_way', // <--- THE BULLETPROOF FIX
+        trip_type: bundle.tripType,
         total_seats_capacity: 4,
         remaining_seats: 4 - bundle.totalSeats,
         price: averagePrice,
@@ -139,24 +135,23 @@ requests.forEach(req => {
 
       if (rideError) throw new Error(`Ride Creation Failed: ${rideError.message}`);
 
-      // 2. Auto-Confirm all passengers in this bundle to the new ride
+      // 2. Auto-Confirm all relational passengers to this new ride
       const matchesToInsert = bundle.passengers.map((p: any) => ({
         ride_id: newRide.id,
         passenger_id: p.passenger_id,
         pickup_postcode: p.pickup_postcode,
-        seats_needed: p.seats_needed,
+        seats_needed: p.seats, // Pulled from relational child table
         match_status: 'confirmed'
       }));
 
       const { error: matchError } = await supabase.from('trip_matches').insert(matchesToInsert);
       if (matchError) throw new Error(`Passenger Match Failed: ${matchError.message}`);
 
-      // 3. Sweep the Jobs Board: Delete these requests so no one else grabs them
-      const requestIdsToDelete = bundle.passengers.map((p: any) => p.id);
-      const { error: deleteError } = await supabase.from('open_requests').delete().in('id', requestIdsToDelete);
+      // 3. Delete the Master Pool (ON DELETE CASCADE will automatically delete the child passengers)
+      const { error: deleteError } = await supabase.from('open_requests').delete().eq('id', bundle.id);
       if (deleteError) throw new Error(`Jobs Board Cleanup Failed: ${deleteError.message}`);
 
-      // 4. Route successfully claimed! Send driver to their dashboard.
+      // 4. Route successfully claimed!
       router.push('/driver/dashboard');
 
     } catch (error: any) {
@@ -165,6 +160,7 @@ requests.forEach(req => {
       setProcessingId(null);
     }
   };
+
   const displayDate = (dateStr: string) => new Date(dateStr).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
   if (loading) return (
@@ -258,7 +254,10 @@ requests.forEach(req => {
                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{p.pickup_postcode}</p>
                            </div>
                         </div>
-                        <p className="font-black text-emerald-600 text-sm">+£{Number(p.calculated_price).toFixed(2)}</p>
+                        <div className="text-right">
+                          <p className="font-black text-emerald-600 text-sm">+£{Number(p.price).toFixed(2)}</p>
+                          <p className="text-[10px] font-bold text-gray-400">{p.seats} Seat(s)</p>
+                        </div>
                       </div>
                     ))}
                   </div>
