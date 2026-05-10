@@ -14,14 +14,19 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
+  Tag,
   X,
   Lock,
-  LayoutDashboard
+  LayoutDashboard,
+  Map,
+  Users,
+  Clock,
+  UserPlus,
+  Radio
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import PassengerAuthForm from "@/components/PassengerAuthForm";
 import PassengerBottomNav from "@/components/PassengerBottomNav";
-// --- THE UPGRADE: Import our new Pricing Engine! ---
 import { calculateTripPrice } from "@/lib/pricing";
 
 function ResultsLogic() {
@@ -31,76 +36,174 @@ function ResultsLogic() {
   const from = searchParams.get("from") || "";
   const to = searchParams.get("to") || "";
   const date = searchParams.get("date") || "";
-// Near the top of ResultsLogic:
-const shift = searchParams.get("shift") || "";
-const friendsParam = searchParams.get("friends") || "";
-// THE FIX: Changed the fallback to 'two_way'
-const tripTypeParam = searchParams.get("trip_type") || "two_way";
+  const shift = searchParams.get("shift") || "";
+  const friendsParam = searchParams.get("friends") || "";
+  const tripTypeParam = searchParams.get("trip_type") || "two_way";
   
+  const lat = parseFloat(searchParams.get("lat") || "0");
+  const lng = parseFloat(searchParams.get("lng") || "0");
+
   const [rides, setRides] = useState<any[]>([]);
+  const [existingBroadcasts, setExistingBroadcasts] = useState<any[]>([]);
+  
   const [loading, setLoading] = useState(true);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+  
+  // --- UPGRADED BROADCAST STATES ---
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
-  const [calculatedFare, setCalculatedFare] = useState<number | null>(null);
-
+  const [activeRequest, setActiveRequest] = useState<any | null>(null); // Now stores the FULL object to render the timeline!
+  const [customOffer, setCustomOffer] = useState<number>(0);
+  
+  const [pageError, setPageError] = useState<string | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
 
   const [userRideStatuses, setUserRideStatuses] = useState<Record<string, string>>({});
   const [hasConfirmedShift, setHasConfirmedShift] = useState(false); 
-  
+
+  const friendsList = friendsParam ? friendsParam.split(',') : [];
+  const totalSeatsNeeded = 1 + friendsList.length;
 
   const fetchRidesAndAuth = async () => {
     setLoading(true);
-    const friendsList = friendsParam ? friendsParam.split(',') : [];
-    const totalSeatsNeeded = 1 + friendsList.length;
+    setPageError(null);
 
-    const { data: ridesData } = await supabase
-      .from('rides')
-      .select('*')
-      .eq('status', 'active')
-      .gte('remaining_seats', totalSeatsNeeded)
-      .eq('ride_date', date)
-      .eq('departure_time', shift)
-      .ilike('destination_hub', `%${to}%`);
+    let baseEstimatedPrice = 0;
+    let pricingMethod = 'base';
+    let dropoffLat = 0;
+    let dropoffLng = 0;
+    let pickupLat = lat;
+    let pickupLng = lng;
 
-    if (ridesData) setRides(ridesData);
+    try {
+      // 1. PRICING ENGINE 
+      const { data: workplaceData } = await supabase
+        .from('workplaces')
+        .select('*')
+        .ilike('name', `%${to.trim()}%`)
+        .maybeSingle(); 
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      setIsLoggedIn(true);
-      
-      const { data: matches } = await supabase
-        .from('trip_matches')
-        .select(`
-          ride_id,
-          match_status,
-          rides!inner(ride_date, departure_time)
-        `)
-        .eq('passenger_id', user.id)
-        .in('match_status', ['pending', 'confirmed'])
-        .eq('rides.ride_date', date)
-        .eq('rides.departure_time', shift);
-      
-      if (matches && matches.length > 0) {
-        const statusMap: Record<string, string> = {};
-        let isConfirmed = false;
-        
-        matches.forEach((m: any) => {
-          statusMap[String(m.ride_id)] = m.match_status;
-          if (m.match_status === 'confirmed') isConfirmed = true; 
-        });
-        
-        setUserRideStatuses(statusMap);
-        setHasConfirmedShift(isConfirmed); 
+      let finalCalculatedFare = 0;
+
+      if (workplaceData && workplaceData.fixed_price) {
+        baseEstimatedPrice = parseFloat(workplaceData.fixed_price);
+        pricingMethod = 'fixed';
+        finalCalculatedFare = baseEstimatedPrice * totalSeatsNeeded;
       } else {
-        setUserRideStatuses({});
-        setHasConfirmedShift(false);
+        const cleanTo = to.replace(/[^a-zA-Z0-9]/g, '');
+        const dropRes = await fetch(`https://api.postcodes.io/postcodes/${cleanTo}`);
+        const dropData = await dropRes.json();
+
+        if (dropData.status === 200) {
+          dropoffLat = dropData.result.latitude;
+          dropoffLng = dropData.result.longitude;
+        }
+
+        if (!pickupLat || !pickupLng) {
+          const cleanFrom = from.replace(/[^a-zA-Z0-9]/g, '');
+          const pickRes = await fetch(`https://api.postcodes.io/postcodes/${cleanFrom}`);
+          const pickData = await pickRes.json();
+          if (pickData.status === 200) {
+            pickupLat = pickData.result.latitude;
+            pickupLng = pickData.result.longitude;
+          }
+        }
+
+        if (pickupLat && dropoffLat) {
+          baseEstimatedPrice = calculateTripPrice(pickupLat, pickupLng, dropoffLat, dropoffLng, 1);
+          pricingMethod = 'calculated';
+          const tripMultiplier = (tripTypeParam === 'round_trip' || tripTypeParam === 'two_way') ? 2 : 1;
+          finalCalculatedFare = baseEstimatedPrice * totalSeatsNeeded * tripMultiplier;
+        } else {
+          setPageError("Location unrecognized. Please select a valid location from the suggested options or enter a full UK postcode.");
+          setLoading(false);
+          return; 
+        }
       }
-    } else {
-      setIsLoggedIn(false);
+
+      setCustomOffer(finalCalculatedFare);
+
+      // 2. FETCH OPEN REQUESTS
+      const { data: openReqs } = await supabase
+        .from('open_requests')
+        .select('*')
+        .ilike('destination_hub', `%${to.trim()}%`)
+        .eq('ride_date', date)
+        .eq('shift_type', shift)
+        .eq('status', 'open');
+
+      // 3. FETCH AVAILABLE DRIVERS
+      const { data: ridesData } = await supabase
+        .from('rides')
+        .select('*')
+        .eq('status', 'active')
+        .gte('remaining_seats', totalSeatsNeeded)
+        .eq('ride_date', date)
+        .eq('departure_time', shift)
+        .ilike('destination_hub', `%${to}%`);
+
+      if (ridesData) {
+        const pricedRides = ridesData.map(ride => ({
+          ...ride,
+          dynamic_price: finalCalculatedFare,
+          pricing_method: pricingMethod
+        }));
+        setRides(pricedRides);
+      }
+
+      // 4. CHECK USER AUTH & EXISTING BROADCASTS
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setIsLoggedIn(true);
+
+        const { data: matches } = await supabase
+          .from('trip_matches')
+          .select(`ride_id, match_status, rides!inner(ride_date, departure_time)`)
+          .eq('passenger_id', user.id)
+          .in('match_status', ['pending', 'confirmed'])
+          .eq('rides.ride_date', date)
+          .eq('rides.departure_time', shift);
+        
+        if (matches && matches.length > 0) {
+          const statusMap: Record<string, string> = {};
+          let isConfirmed = false;
+          matches.forEach((m: any) => {
+            statusMap[String(m.ride_id)] = m.match_status;
+            if (m.match_status === 'confirmed') isConfirmed = true; 
+          });
+          setUserRideStatuses(statusMap);
+          setHasConfirmedShift(isConfirmed); 
+        }
+
+        if (openReqs) {
+          const userExistingReq = openReqs.find(req => req.passenger_id === user.id);
+          
+          if (userExistingReq) {
+             setBroadcastSuccess(true);
+             setActiveRequest(userExistingReq); // Save full object to render timeline
+             setCustomOffer(userExistingReq.calculated_price);
+          }
+
+          const validPools = openReqs.filter(req => 
+            (req.seats_needed + totalSeatsNeeded) <= 4 && 
+            req.passenger_id !== user.id
+          );
+          setExistingBroadcasts(validPools);
+        }
+
+      } else {
+        setIsLoggedIn(false);
+        if (openReqs) {
+          const validPools = openReqs.filter(req => (req.seats_needed + totalSeatsNeeded) <= 4);
+          setExistingBroadcasts(validPools);
+        }
+      }
+      
+    } catch (error) {
+      console.error(error);
+      setPageError("We encountered a network error calculating the route. Please try again.");
     }
-    
+
     setLoading(false);
   };
 
@@ -118,23 +221,16 @@ const tripTypeParam = searchParams.get("trip_type") || "two_way";
   };
 
   const handleBookSeat = async (rideId: string) => {
-    if (!isLoggedIn) {
-      setShowLoginModal(true);
-      return;
-    }
-
+    if (!isLoggedIn) return setShowLoginModal(true);
     setActionLoadingId(rideId);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const finalPickup = getUnifiedPickupString();
-    const seatsNeeded = 1 + (friendsParam ? friendsParam.split(',').length : 0);
-
     const { error } = await supabase.from('trip_matches').insert([{
       ride_id: rideId,
       passenger_id: user.id,
-      pickup_postcode: finalPickup,
-      seats_needed: seatsNeeded,
+      pickup_postcode: getUnifiedPickupString(),
+      seats_needed: totalSeatsNeeded,
       match_status: 'pending' 
     }]);
 
@@ -146,101 +242,86 @@ const tripTypeParam = searchParams.get("trip_type") || "two_way";
     setActionLoadingId(null);
   };
 
-  // --- THE UPGRADE: Smart Algorithmic Broadcast ---
-  const handleBroadcast = async () => {
-    if (!isLoggedIn) {
-      setShowLoginModal(true);
-      return;
-    }
+  const handleJoinBroadcast = async (req: any) => {
+    if (!isLoggedIn) return setShowLoginModal(true);
+    setActionLoadingId(req.id);
+    
+    const newSeats = req.seats_needed + totalSeatsNeeded;
+    const newPrice = req.calculated_price + customOffer; 
+    
+    // THIS MERGES THE POSTCODES WITH A PIPE FOR THE TIMELINE UI
+    const mergedPickups = `${req.pickup_postcode} | ${getUnifiedPickupString()}`;
 
+    const { error } = await supabase
+      .from('open_requests')
+      .update({
+        seats_needed: newSeats,
+        calculated_price: newPrice,
+        pickup_postcode: mergedPickups 
+      })
+      .eq('id', req.id);
+
+    if (!error) {
+      setBroadcastSuccess(true);
+      // Update the active request locally so the UI updates instantly
+      setActiveRequest({
+        ...req,
+        seats_needed: newSeats,
+        calculated_price: newPrice,
+        pickup_postcode: mergedPickups
+      });
+    } else {
+      alert("Failed to join request.");
+    }
+    setActionLoadingId(null);
+  };
+
+  const handleBroadcast = async () => {
+    if (!isLoggedIn) return setShowLoginModal(true);
     setActionLoadingId('broadcast');
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const finalPickup = getUnifiedPickupString();
-    const cleanPickupPostcode = from.replace(/[^a-zA-Z0-9]/g, ''); // Clean for API
-    const seatsNeeded = 1 + (friendsParam ? friendsParam.split(',').length : 0);
-
     try {
-      // 1. Ask postcodes.io for the Passenger's exact coordinates (100% Free)
-      const pickupRes = await fetch(`https://api.postcodes.io/postcodes/${cleanPickupPostcode}`);
-      const pickupData = await pickupRes.json();
-      
-      if (pickupData.status !== 200) {
-        alert("We couldn't verify your pickup postcode. Please check it and try again.");
-        setActionLoadingId(null);
-        return;
-      }
-      
-      const pickupLat = pickupData.result.latitude;
-      const pickupLng = pickupData.result.longitude;
-
-      // 2. Check if the Destination Hub exists in our Database
-      const { data: hubData } = await supabase
-        .from('destination_hubs')
-        .select('*')
-        .ilike('hub_name', `%${to}%`)
-        .single();
-
-      let dropoffLat = 0;
-      let dropoffLng = 0;
-      let finalPrice = 0;
-      let hubId = null;
-
-      if (hubData) {
-        // We know this hub! 
-        dropoffLat = hubData.latitude;
-        dropoffLng = hubData.longitude;
-        hubId = hubData.id;
-
-        // Use the hardcoded fixed price if you set one, otherwise let the math do it!
-        if (hubData.fixed_price) {
-          finalPrice = parseFloat(hubData.fixed_price);
-        } else {
-          finalPrice = calculateTripPrice(pickupLat, pickupLng, dropoffLat, dropoffLng, seatsNeeded);
-        }
-      } else {
-        // Fallback: If it's a new location, try treating 'to' as a postcode
-        const cleanDropoffPostcode = to.replace(/[^a-zA-Z0-9]/g, '');
-        const dropRes = await fetch(`https://api.postcodes.io/postcodes/${cleanDropoffPostcode}`);
-        const dropData = await dropRes.json();
-
-        if (dropData.status === 200) {
-          dropoffLat = dropData.result.latitude;
-          dropoffLng = dropData.result.longitude;
-          finalPrice = calculateTripPrice(pickupLat, pickupLng, dropoffLat, dropoffLng, seatsNeeded);
-        } else {
-          // Absolute last resort: Standard flat rate if the API fails
-          finalPrice = 10.00 * seatsNeeded; 
-        }
-      }
-
-      // 3. Save EVERYTHING to the jobs board
-      const { error } = await supabase.from('open_requests').insert([{
+      const { data, error } = await supabase.from('open_requests').insert([{
         passenger_id: user.id,
-        pickup_postcode: finalPickup,
+        pickup_postcode: getUnifiedPickupString(),
         destination_hub: to,
-        destination_hub_id: hubId, // Links it properly in DB!
-        pickup_latitude: pickupLat,
-        pickup_longitude: pickupLng,
+        pickup_latitude: lat,
+        pickup_longitude: lng,
         ride_date: date,
         shift_type: shift,
-        seats_needed: seatsNeeded,
-        calculated_price: finalPrice // The Driver will see this exact number!
-      }]);
+        seats_needed: totalSeatsNeeded,
+        calculated_price: customOffer 
+      }]).select().single();
 
-      if (!error) {
-        setCalculatedFare(finalPrice);
+      if (!error && data) {
         setBroadcastSuccess(true);
+        setActiveRequest(data); // Save full object to render timeline
       } else {
         alert("Failed to broadcast request.");
       }
-
     } catch (err) {
       console.error(err);
-      alert("Something went wrong calculating your route.");
     }
+    setActionLoadingId(null);
+  };
 
+  const cancelActiveRequest = async () => {
+    if (!activeRequest) return;
+    setActionLoadingId('cancel_broadcast');
+    
+    const { error } = await supabase
+      .from('open_requests')
+      .delete()
+      .eq('id', activeRequest.id);
+
+    if (!error) {
+      setBroadcastSuccess(false);
+      setActiveRequest(null);
+    } else {
+      alert("Could not cancel request. Please try again.");
+    }
     setActionLoadingId(null);
   };
 
@@ -275,20 +356,45 @@ const tripTypeParam = searchParams.get("trip_type") || "two_way";
 
   const displayDate = date ? new Date(date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
 
+  if (pageError && !loading) return (
+    <div className="space-y-6 animate-in fade-in zoom-in-95 mt-8">
+      <div className="bg-white rounded-[24px] border border-red-100 p-8 text-center shadow-sm max-w-md mx-auto">
+        <div className="mx-auto h-20 w-20 bg-red-50 rounded-full flex items-center justify-center mb-5 border border-red-100">
+          <Map className="h-10 w-10 text-red-500" />
+        </div>
+        <h3 className="font-black text-gray-900 text-2xl mb-2 tracking-tight">Location Unrecognized</h3>
+        <p className="text-gray-600 text-sm mb-8 leading-relaxed font-medium">{pageError}</p>
+        <Link href="/search" className="w-full flex justify-center items-center gap-2 bg-gray-900 text-white font-black py-4 rounded-xl shadow-md hover:bg-gray-800 transition-colors active:scale-95">
+          <ArrowLeft className="h-5 w-5" /> Return to Search
+        </Link>
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-6 animate-in fade-in">
       
-      <div className="bg-emerald-600 rounded-[24px] p-5 text-white shadow-md shadow-emerald-600/20 relative overflow-hidden">
-        <div className="absolute top-0 right-0 p-4 opacity-10">
-          <MapPin className="h-24 w-24" />
-        </div>
-        <div className="relative z-10 space-y-1">
-          <p className="text-[10px] font-bold text-emerald-200 uppercase tracking-widest">Searching Route</p>
-          <h2 className="text-2xl font-black uppercase tracking-tight leading-none mb-2">{to}</h2>
-          <div className="flex items-center gap-3 text-sm font-bold text-emerald-100">
-            <span className="flex items-center gap-1"><Calendar className="h-4 w-4" /> {displayDate}</span>
-            <span>•</span>
-            <span>{shift}</span>
+      <div className="bg-gray-900 rounded-[24px] p-6 text-white shadow-xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-4 opacity-5"><MapPin className="h-32 w-32" /></div>
+        <div className="relative z-10 space-y-4">
+          
+          <div className="flex justify-between items-start">
+            <h2 className="text-3xl font-black tracking-tight leading-none text-emerald-400">{to}</h2>
+            <div className="bg-gray-800 border border-gray-700 px-3 py-1 rounded-full flex items-center gap-1.5 shadow-inner">
+               <Users className="h-3 w-3 text-emerald-400" />
+               <span className="text-xs font-bold text-gray-200">{totalSeatsNeeded} Passenger{totalSeatsNeeded > 1 ? 's' : ''}</span>
+            </div>
+          </div>
+
+          <div className="bg-gray-800/50 rounded-xl p-3 border border-gray-700/50 flex divide-x divide-gray-700">
+            <div className="flex-1 pr-3 flex flex-col justify-center">
+              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Date</p>
+              <p className="text-sm font-bold flex items-center gap-1.5"><Calendar className="h-3.5 w-3.5 text-emerald-400" /> {displayDate}</p>
+            </div>
+            <div className="flex-1 pl-3 flex flex-col justify-center">
+              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Shift</p>
+              <p className="text-sm font-bold flex items-center gap-1.5"><Clock className="h-3.5 w-3.5 text-emerald-400" /> {shift}</p>
+            </div>
           </div>
         </div>
       </div>
@@ -296,75 +402,229 @@ const tripTypeParam = searchParams.get("trip_type") || "two_way";
       {loading ? (
         <div className="py-20 flex flex-col items-center justify-center space-y-4">
           <Loader2 className="h-10 w-10 animate-spin text-emerald-600" />
-          <p className="text-sm font-bold text-gray-400 animate-pulse">Scanning driver routes...</p>
+          <p className="text-sm font-bold text-gray-400 animate-pulse">Calculating optimal routes...</p>
         </div>
       ) : rides.length === 0 ? (
         
-        <div className="bg-white rounded-[24px] border border-gray-200 p-8 text-center shadow-sm">
-          {broadcastSuccess ? (
+        <div className="bg-white rounded-[24px] border border-gray-200 p-5 shadow-sm space-y-6">
+          
+          {broadcastSuccess && activeRequest ? (
+            
+            /* --- EXCLUSIVE ACTIVE BROADCAST STATE (REPLACES TEXT) --- */
             <div className="animate-in zoom-in slide-in-from-bottom-4">
-              <div className="mx-auto h-20 w-20 bg-emerald-50 rounded-full flex items-center justify-center mb-5 border border-emerald-100">
-                <CheckCircle className="h-10 w-10 text-emerald-500" />
+              <div className="bg-white border-2 border-emerald-500 rounded-[20px] overflow-hidden shadow-lg shadow-emerald-600/10 text-left relative">
+                
+                <div className="absolute -right-4 -top-4 opacity-5 pointer-events-none">
+                  <Radio className="h-32 w-32 text-emerald-600" />
+                </div>
+                
+                <div className="p-5 border-b border-emerald-50 flex justify-between items-start relative z-10">
+                  <div>
+                    <h4 className="font-black text-gray-900 text-xl mb-1 tracking-tight">Looking for Driver</h4>
+                    <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest flex items-center gap-1.5">
+                      <span className="relative flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                      </span>
+                      Broadcasting...
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Offered Fare</p>
+                    <p className="font-black text-2xl text-emerald-600 leading-none">£{activeRequest.calculated_price.toFixed(2)}</p>
+                  </div>
+                </div>
+
+                <div className="p-5 bg-emerald-50/30 relative z-10">
+                  <div className="grid grid-cols-2 gap-4 mb-5 bg-white rounded-xl p-3 border border-emerald-100/50 shadow-sm">
+                    <div>
+                       <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Shift</p>
+                       <p className="text-sm font-bold text-gray-900 flex items-center gap-1.5"><Clock className="h-3.5 w-3.5 text-emerald-500"/> {activeRequest.shift_type}</p>
+                    </div>
+                    <div>
+                       <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Date</p>
+                       <p className="text-sm font-bold text-gray-900 flex items-center gap-1.5"><Calendar className="h-3.5 w-3.5 text-emerald-500"/> {new Date(activeRequest.ride_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short'})}</p>
+                    </div>
+                  </div>
+
+                  {/* Dynamic Route Timeline (Splits merged postcodes!) */}
+                  <div className="relative pl-6 space-y-4">
+                    <div className="absolute left-[11px] top-2 bottom-2 w-0.5 bg-emerald-200 rounded-full"></div>
+                    
+                    <div className="relative">
+                      <div className="absolute -left-6 top-1 h-3 w-3 bg-emerald-500 rounded-full border-2 border-emerald-50 shadow-sm"></div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Pickups ({activeRequest.seats_needed} Seats)</p>
+                      <div className="flex flex-col gap-1.5">
+                        {activeRequest.pickup_postcode.split('|').map((loc: string, i: number) => (
+                          <span key={i} className="text-sm font-bold text-gray-900 leading-tight">{loc.trim()}</span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="relative pt-2">
+                      <div className="absolute -left-6 top-3 h-3 w-3 bg-gray-900 rounded-sm border-2 border-emerald-50 shadow-sm"></div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Destination</p>
+                      <p className="text-sm font-black text-gray-900 leading-tight">{activeRequest.destination_hub}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-white relative z-10 border-t border-emerald-50 flex gap-2">
+                   <Link href="/passenger/dashboard" className="flex-1 bg-gray-900 text-white font-black py-4 rounded-xl shadow-md hover:bg-gray-800 transition-colors text-center flex items-center justify-center gap-2">
+                      <LayoutDashboard className="h-4 w-4" /> Dashboard
+                   </Link>
+                   <button 
+                    onClick={cancelActiveRequest}
+                    disabled={actionLoadingId === 'cancel_broadcast'}
+                    className="flex-1 bg-red-50 text-red-600 border-2 border-red-100 font-black py-4 rounded-xl hover:bg-red-100 transition-all flex justify-center items-center gap-2 disabled:opacity-50 active:scale-[0.98]"
+                   >
+                    {actionLoadingId === 'cancel_broadcast' ? <Loader2 className="h-5 w-5 animate-spin" /> : <XCircle className="h-5 w-5" />}
+                    Revoke
+                   </button>
+                </div>
               </div>
-              <h3 className="font-black text-gray-900 text-2xl mb-1 tracking-tight">Broadcast Sent!</h3>
-              {/* Show the passenger their generated fare! */}
-              <p className="font-black text-emerald-600 text-xl mb-4">Estimated Fare: £{calculatedFare?.toFixed(2)}</p>
-              
-              <p className="text-gray-500 text-sm mb-8 leading-relaxed">
-                Your request has been beamed to our driver network. We will notify you the moment a driver accepts your trip.
-              </p>
-              <Link href="/passenger/dashboard" className="w-full block bg-gray-900 text-white font-black py-4 rounded-xl shadow-md hover:bg-gray-800 transition-colors">
-                Track on Dashboard
-              </Link>
             </div>
+
           ) : (
-            <div className="animate-in fade-in">
-              <div className="mx-auto h-20 w-20 bg-gray-50 rounded-full flex items-center justify-center mb-5 border border-gray-100">
-                <AlertCircle className="h-10 w-10 text-gray-300" />
+            
+            /* --- BROADCAST TO NETWORK STATE --- */
+            <div className="animate-in fade-in space-y-6">
+              
+              <div className="text-center">
+                <div className="mx-auto h-14 w-14 bg-gray-50 rounded-full flex items-center justify-center mb-3 border border-gray-100">
+                  <Rss className="h-6 w-6 text-gray-400" />
+                </div>
+                <h3 className="font-black text-gray-900 text-xl tracking-tight">Request to Available Driver's</h3>
+                <p className="text-gray-500 text-sm leading-relaxed mt-1">
+                  No drivers found. Inform your request and drivers will claim it.
+                </p>
               </div>
-              <h3 className="font-black text-gray-900 text-2xl mb-2 tracking-tight">No Matches Yet</h3>
-              <p className="text-gray-500 text-sm mb-8 leading-relaxed">
-                There are no drivers scheduled for this exact route and time. Broadcast your request to alert drivers of the available job.
-              </p>
+
+              <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200 shadow-inner">
+                 <div className="flex justify-between items-end mb-2">
+                   <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Your Offer (Edit to entice drivers)</label>
+                   <span className="text-[10px] font-bold text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded uppercase tracking-widest">For {totalSeatsNeeded}</span>
+                 </div>
+                 <div className="flex items-center gap-3 bg-white border border-emerald-200 rounded-xl px-4 py-3 shadow-sm ring-1 ring-emerald-500/10">
+                   <span className="text-2xl font-black text-emerald-600">£</span>
+                   <input
+                     type="number"
+                     step="0.50"
+                     value={customOffer}
+                     onChange={(e) => setCustomOffer(Number(e.target.value))}
+                     className="w-full text-3xl font-black text-gray-900 focus:outline-none"
+                   />
+                 </div>
+              </div>
+
               <button 
                 onClick={handleBroadcast} 
                 disabled={actionLoadingId === 'broadcast' || hasConfirmedShift}
-                className="w-full bg-emerald-600 text-white font-black py-4 rounded-xl shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 active:scale-95 disabled:opacity-50"
+                className="w-full bg-gray-900 text-white font-black py-4 rounded-xl shadow-lg hover:bg-gray-800 transition-all flex justify-center items-center gap-2 active:scale-95 disabled:opacity-50"
               >
                 {actionLoadingId === 'broadcast' ? <Loader2 className="h-5 w-5 animate-spin" /> : <Rss className="h-5 w-5" />}
-                {hasConfirmedShift ? "Shift Already Booked" : "Broadcast to Drivers"}
+                {hasConfirmedShift ? "Shift Already Booked" : "Broadcast Route"}
               </button>
+
+              {existingBroadcasts.length > 0 && (
+                <div className="space-y-4 pt-4 border-t border-gray-100">
+                  <div className="flex items-center gap-2 justify-center mb-1">
+                    <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest px-2 bg-emerald-50 rounded-full py-1">Carpool Opportunities Available</span>
+                  </div>
+
+                  {existingBroadcasts.map(req => {
+                    const currentPassengers = req.seats_needed;
+                    const spotsLeft = 4 - currentPassengers;
+                    const allPickups = req.pickup_postcode.split('|');
+
+                    return (
+                      <div key={req.id} className="bg-white border-2 border-gray-100 hover:border-emerald-200 rounded-2xl overflow-hidden shadow-sm transition-all text-left">
+                        
+                        <div className="p-4 border-b border-gray-50 flex justify-between items-start">
+                          <div>
+                            <h4 className="font-black text-gray-900 text-lg mb-0.5">Shift Carpool</h4>
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{currentPassengers} Passenger(s) Waiting</p>
+                          </div>
+                          <div className="bg-emerald-50 text-emerald-700 font-bold text-xs px-2.5 py-1 rounded-lg border border-emerald-100">
+                            {spotsLeft} Spots Left
+                          </div>
+                        </div>
+
+                        <div className="p-4 bg-gray-50/50">
+                          <div className="relative pl-6 space-y-4">
+                            <div className="absolute left-[11px] top-2 bottom-2 w-0.5 bg-gray-200 rounded-full"></div>
+                            
+                            <div className="relative">
+                              <div className="absolute -left-6 top-1 h-3 w-3 bg-emerald-500 rounded-full border-2 border-white shadow-sm ring-1 ring-emerald-500/20"></div>
+                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Current Pickups</p>
+                              <div className="flex flex-col gap-1">
+                                {allPickups.map((loc: string, i: number) => (
+                                  <span key={i} className="text-sm font-bold text-gray-900 leading-tight">{loc.trim()}</span>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="relative pt-1">
+                              <div className="absolute -left-6 top-2 h-3 w-3 bg-gray-900 rounded-sm border-2 border-white shadow-sm ring-1 ring-gray-900/20"></div>
+                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Destination</p>
+                              <p className="text-sm font-bold text-gray-900 leading-tight">{to}</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="p-4">
+                           <button 
+                            onClick={() => handleJoinBroadcast(req)}
+                            disabled={actionLoadingId === req.id || spotsLeft < totalSeatsNeeded}
+                            className="w-full bg-emerald-600 text-white font-black py-3.5 rounded-xl shadow-md shadow-emerald-600/20 hover:bg-emerald-700 transition-all flex justify-center items-center gap-2 disabled:opacity-50"
+                           >
+                            {actionLoadingId === req.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
+                            {spotsLeft < totalSeatsNeeded ? 'Not Enough Room' : `Join Pool for £${customOffer.toFixed(2)}`}
+                           </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
             </div>
           )}
         </div>
       ) : (
         
-        /* ... Render rides (exact same as before) ... */
         <div className="space-y-4 pt-2">
-          <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest px-1">{rides.length} Drivers Available</h3>
+          <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest px-1">{rides.length} Driver(s) Scheduled</h3>
           
           {rides.map((ride) => {
             const rideStatus = userRideStatuses[String(ride.id)];
             const isLockedOut = hasConfirmedShift && rideStatus !== 'confirmed';
 
             return (
-              <div key={ride.id} className={`bg-white rounded-[24px] shadow-sm transition-all overflow-hidden animate-in slide-in-from-bottom-4 ${rideStatus === 'confirmed' ? 'border-2 border-emerald-500' : 'border-2 border-emerald-50 hover:border-emerald-200'}`}>
-                <div className="p-5 space-y-4">
+              <div key={ride.id} className={`bg-white rounded-[24px] shadow-sm transition-all overflow-hidden animate-in slide-in-from-bottom-4 relative ${rideStatus === 'confirmed' ? 'border-2 border-emerald-500' : 'border-2 border-gray-100 hover:border-emerald-200'}`}>
+                
+                {ride.pricing_method === 'fixed' && (
+                  <div className="absolute top-0 right-0 bg-blue-600 text-white text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-bl-lg shadow-sm flex items-center gap-1 z-10">
+                    <Tag className="h-2.5 w-2.5" /> Platform Fare
+                  </div>
+                )}
+
+                <div className="p-5 space-y-5 pt-6">
                   <div className="flex justify-between items-start">
                     <div className="flex items-center gap-3">
-                      <div className="h-12 w-12 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-800 font-black text-xl border border-emerald-200">
+                      <div className="h-12 w-12 bg-gray-900 rounded-full flex items-center justify-center text-white font-black text-xl shadow-inner">
                         {ride.driver_name.charAt(0)}
                       </div>
                       <div>
                         <h4 className="font-black text-gray-900 text-lg leading-none mb-1">{ride.driver_name}</h4>
                         <p className="text-[10px] font-bold text-emerald-600 flex items-center gap-1 uppercase tracking-widest">
-                          <ShieldCheck className="h-3 w-3" /> Verified
+                          <ShieldCheck className="h-3 w-3" /> Verified Driver
                         </p>
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Price</p>
-                      <p className="font-black text-2xl text-gray-900 leading-none">£{ride.price.toFixed(2)}</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Your Fare</p>
+                      <p className="font-black text-2xl text-emerald-600 leading-none">£{ride.dynamic_price?.toFixed(2)}</p>
                     </div>
                   </div>
                   
@@ -395,8 +655,8 @@ const tripTypeParam = searchParams.get("trip_type") || "two_way";
                       <Lock className="h-5 w-5" /> Shift Already Booked
                     </button>
                   ) : (
-                    <button onClick={() => handleBookSeat(ride.id)} disabled={actionLoadingId === ride.id} className="w-full bg-emerald-600 text-white py-4 rounded-xl font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70 shadow-md shadow-emerald-600/20">
-                      {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : "Request Seat"}
+                    <button onClick={() => handleBookSeat(ride.id)} disabled={actionLoadingId === ride.id} className="w-full bg-gray-900 text-white py-4 rounded-xl font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70 shadow-md">
+                      {actionLoadingId === ride.id ? <Loader2 className="h-5 w-5 animate-spin" /> : `Request ${totalSeatsNeeded} Seat(s)`}
                     </button>
                   )}
                 </div>
@@ -428,25 +688,16 @@ export default function ResultsPage() {
           <Link href="/search" className="p-2 -ml-2 rounded-full hover:bg-gray-200 text-gray-600 transition-colors">
             <ArrowLeft className="h-5 w-5" />
           </Link>
-          <h1 className="text-lg font-black text-gray-900 tracking-tight">Available Routes</h1>
+          <h1 className="text-lg font-black text-gray-900 tracking-tight">Search Results</h1>
         </div>
-        
-        <Link 
-          href="/passenger/dashboard" 
-          className="bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-xl text-xs font-black hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 transition-all shadow-sm flex items-center gap-2 active:scale-95"
-        >
+        <Link href="/passenger/dashboard" className="bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-xl text-xs font-black hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 transition-all shadow-sm flex items-center gap-2 active:scale-95">
           <LayoutDashboard className="h-4 w-4" />
           Dashboard
         </Link>
       </header>
 
-      <main className="max-w-md mx-auto p-4 pt-2">
-        <Suspense fallback={
-          <div className="py-20 flex flex-col items-center justify-center space-y-4">
-            <Loader2 className="h-10 w-10 animate-spin text-emerald-600" />
-            <p className="text-sm font-bold text-gray-400 animate-pulse">Loading connection...</p>
-          </div>
-        }>
+      <main className="max-w-md mx-auto p-4 pt-4">
+        <Suspense fallback={<div className="py-20 flex justify-center"><Loader2 className="h-10 w-10 animate-spin text-emerald-600" /></div>}>
           <ResultsLogic />
         </Suspense>
       </main>

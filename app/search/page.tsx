@@ -41,11 +41,16 @@ interface FriendInput {
 }
 
 export default function SearchPage() {
-  const router = useRouter(); // Added router for redirection
+  const router = useRouter(); 
   const [loading, setLoading] = React.useState(false);
   
   const dateInputRef = React.useRef<HTMLInputElement>(null);
+  
+  // --- LOCATION STATE ---
   const [from, setFrom] = React.useState("");
+  const [fromLat, setFromLat] = React.useState<number | null>(null);
+  const [fromLng, setFromLng] = React.useState<number | null>(null);
+  
   const [to, setTo] = React.useState("");
   
   const [dateSelection, setDateSelection] = React.useState<'today' | 'tomorrow' | 'custom'>('today');
@@ -61,18 +66,25 @@ export default function SearchPage() {
 
   const [friends, setFriends] = React.useState<FriendInput[]>([]);
 
-  const [locations, setLocations] = React.useState<{name: string}[]>([]);
-  const [filteredFrom, setFilteredFrom] = React.useState<{name: string}[]>([]);
-  const [showFromSuggestions, setShowFromSuggestions] = React.useState(false);
-  const [filteredTo, setFilteredTo] = React.useState<{name: string}[]>([]);
-  const [showToSuggestions, setShowToSuggestions] = React.useState(false);
-
+  // --- AUTO LOAD PROFILE ON MOUNT ---
   React.useEffect(() => {
-    async function loadLocations() {
-      const { data, error } = await supabase.from('workplace_locations').select('name');
-      if (!error && data) setLocations(data);
+    async function fetchSavedProfile() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase
+          .from('passenger_profiles')
+          .select('postcode, home_latitude, home_longitude')
+          .eq('id', user.id)
+          .single();
+
+        if (profile && profile.postcode) {
+          setFrom(profile.postcode);
+          setFromLat(profile.home_latitude);
+          setFromLng(profile.home_longitude);
+        }
+      }
     }
-    loadLocations();
+    fetchSavedProfile();
   }, []);
 
   const formatPostcode = (value: string) => {
@@ -117,19 +129,37 @@ export default function SearchPage() {
     const searchShift = shift === "Custom" ? `${customStart.h}:${customStart.m} ${customStart.p}` : shift.split(" - ")[0];
     const validFriends = friends.filter(f => f.postcode.length > 4).map(f => f.postcode).join(',');
 
+    // --- ON-THE-FLY GEOCODING (In case they changed the location from their default) ---
+    let finalLat = fromLat;
+    let finalLng = fromLng;
+
+    if (!finalLat || !finalLng) {
+      try {
+        const osmRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(from + ', UK')}&format=json&limit=1`);
+        const osmData = await osmRes.json();
+        if (osmData && osmData.length > 0) {
+          finalLat = parseFloat(osmData[0].lat);
+          finalLng = parseFloat(osmData[0].lon);
+        }
+      } catch (err) {
+        console.error("Could not geocode on the fly.");
+      }
+    }
+
     // Build the URL parameters and navigate to the separate results page
     const queryParams = new URLSearchParams({
       from,
       to,
       date: searchDate,
       shift: searchShift,
-      friends: validFriends
+      friends: validFriends,
+      trip_type: tripType, // Helps results page calculate
+      lat: finalLat?.toString() || "",
+      lng: finalLng?.toString() || ""
     });
 
     router.push(`/search/results?${queryParams.toString()}`);
   };
-
-  const inputClass = "w-full rounded-xl border border-gray-200 bg-gray-50 py-3 text-gray-900 font-bold focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 placeholder:text-gray-400 placeholder:font-medium";
 
   return (
     <div className="min-h-screen bg-gray-50 pb-28 flex flex-col">
@@ -155,35 +185,36 @@ export default function SearchPage() {
         </div>
 
         <form onSubmit={handleSearch} className="rounded-[24px] border border-gray-200 bg-white p-5 shadow-sm space-y-6">
-  <div className="space-y-4 relative">
+          <div className="space-y-4 relative">
             
-            {/* --- 1. LEAVING FROM (Fixed: Now uses the Smart Component!) --- */}
+            {/* --- 1. LEAVING FROM --- */}
             <div className="space-y-1.5 relative z-20">
               <label className="text-[10px] font-black uppercase tracking-widest text-emerald-600 ml-1">Leaving From</label>
               
               <WorkplaceAutocomplete 
                 value={from} 
-                onChange={setFrom} 
+                onChange={(val) => {
+                  setFrom(val);
+                  // If they type a new location, clear the saved Lat/Lng so it forces on-the-fly geocoding
+                  setFromLat(null);
+                  setFromLng(null);
+                }} 
                 placeholder="Postcode or Workplace..." 
                 icon="map-pin"
               />
-              
+              {fromLat && <p className="text-[9px] text-emerald-600 font-bold absolute -bottom-4 right-1">✓ Saved location</p>}
             </div>
 
             {/* --- 2. GOING TO --- */}
-            <div className="space-y-1.5 relative z-10">
+            <div className="space-y-1.5 relative z-10 pt-2">
               <label className="text-[10px] font-black uppercase tracking-widest text-emerald-600 ml-1">Going To</label>
-              
               <WorkplaceAutocomplete 
                 value={to} 
                 onChange={setTo} 
                 placeholder="Search workplaces..." 
                 icon="navigation"
               />
-              
             </div>
-            
-          
             
           </div>
 
