@@ -18,6 +18,7 @@ import {
   AlertCircle, 
   X,
   ChevronRight,
+  ChevronLeft,
   LayoutDashboard
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -38,9 +39,36 @@ const ROLLER_HOURS = Array.from({ length: 12 }, (_, i) => (i + 1).toString().pad
 const ROLLER_MINUTES = ["00", "15", "30", "45"]; 
 const ROLLER_AMPM = ["AM", "PM"];
 
+// ==========================
+// LOCAL DATE HELPERS
+// ==========================
+const getLocalDateString = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const parseLocalDate = (dateStr: string) => {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  return new Date(year, month - 1, day);
+};
+
+const formatDisplayDate = (dateStr: string) => {
+  if (!dateStr) return "";
+  try {
+    const date = parseLocalDate(dateStr);
+    return date.toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+    });
+  } catch {
+    return dateStr;
+  }
+};
+
 export default function DriverHomePage() {
   const router = useRouter();
-  const dateInputRef = useRef<HTMLInputElement>(null);
   
   const [profile, setProfile] = useState<any>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
@@ -50,12 +78,18 @@ export default function DriverHomePage() {
   
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  
-  // THE FIX: State uses 'two_way' to satisfy the DB constraint
   const [tripType, setTripType] = useState<'one_way' | 'two_way'>('two_way');
   
+  // DATE STATE (Fixed to local timezone)
+  const [todayStr, setTodayStr] = useState("");
+  const [tomorrowStr, setTomorrowStr] = useState("");
   const [dateSelection, setDateSelection] = useState<'today' | 'tomorrow' | 'specific'>('today');
   const [specificDate, setSpecificDate] = useState("");
+  
+  // CALENDAR MODAL STATE
+  const [showCalendarModal, setShowCalendarModal] = useState(false);
+  const [calendarViewDate, setCalendarViewDate] = useState(new Date());
+
   const [shiftType, setShiftType] = useState("");
   const [price, setPrice] = useState("4.50");
   const [seatsAvailable, setSeatsAvailable] = useState("3");
@@ -77,6 +111,15 @@ export default function DriverHomePage() {
 
   useEffect(() => {
     checkUser();
+
+    // Set local dates securely on client mount
+    const now = new Date();
+    setTodayStr(getLocalDateString(now));
+    setCalendarViewDate(now);
+
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    setTomorrowStr(getLocalDateString(tomorrow));
   }, []);
 
   async function checkUser() {
@@ -110,7 +153,6 @@ export default function DriverHomePage() {
     const formattedStart = `${startRoll.h}:${startRoll.m} ${startRoll.p}`;
     let finalString = formattedStart;
 
-    // THE FIX: Check for 'two_way' instead of 'round_trip'
     if (tripType === 'two_way') {
       const formattedEnd = `${endRoll.h}:${endRoll.m} ${endRoll.p}`;
       finalString = `${formattedStart} - ${formattedEnd}`;
@@ -121,8 +163,52 @@ export default function DriverHomePage() {
     setIsCustomModalOpen(false);
   };
 
-  const openCalendar = () => {
-    if (dateInputRef.current) dateInputRef.current.showPicker();
+  // Generate the premium calendar grid
+  const generateCalendarGrid = () => {
+    const year = calendarViewDate.getFullYear();
+    const month = calendarViewDate.getMonth();
+    
+    const firstDayOfMonth = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    
+    const days = [];
+
+    // Adjust for Monday start: 0 = Sunday, 1 = Monday
+    for (let i = 0; i < (firstDayOfMonth === 0 ? 6 : firstDayOfMonth - 1); i++) {
+      days.push(<div key={`empty-${i}`} className="h-10 w-10"></div>);
+    }
+
+    for (let i = 1; i <= daysInMonth; i++) {
+      const currentDate = new Date(year, month, i);
+      const dateString = getLocalDateString(currentDate);
+      
+      const isPast = dateString < todayStr;
+      const isSelected = dateString === specificDate && dateSelection === 'specific';
+
+      days.push(
+        <button
+          key={dateString}
+          type="button"
+          disabled={isPast}
+          onClick={() => {
+            setSpecificDate(dateString);
+            setDateSelection('specific');
+            setShowCalendarModal(false);
+            setErrorMsg(null);
+          }}
+          className={`h-10 w-10 flex items-center justify-center rounded-full text-sm font-bold transition-all ${
+            isSelected 
+              ? 'bg-gray-900 text-white shadow-md scale-110' 
+              : isPast 
+                ? 'text-gray-300 cursor-not-allowed' 
+                : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+          }`}
+        >
+          {i}
+        </button>
+      );
+    }
+    return days;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -140,13 +226,22 @@ export default function DriverHomePage() {
     }
 
     setIsSubmitting(true);
-    const rideDate = dateSelection === 'today' ? new Date().toISOString().split('T')[0] : 
-                     dateSelection === 'tomorrow' ? new Date(Date.now() + 86400000).toISOString().split('T')[0] : specificDate;
+    
+    // STRICT TIMEZONE FIX: No toISOString() allowed.
+    let rideDate = specificDate;
+    if (dateSelection === 'today') rideDate = todayStr;
+    if (dateSelection === 'tomorrow') rideDate = tomorrowStr;
 
-    const finalDep = shiftType === 'Custom' ? `${startRoll.h}:${startRoll.m} ${startRoll.p}` : shiftType.split(' - ')[0];
+    if (!rideDate) {
+      setErrorMsg("Please select a valid travel date.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    // THE SHIFT MATCH FIX: Keep the full string ("6AM - 2PM") so passenger search EXACTLY matches it.
+    const finalDep = shiftType === 'Custom' ? savedCustomString : shiftType;
     const finalRet = tripType === 'two_way' ? (shiftType === 'Custom' ? `${endRoll.h}:${endRoll.m} ${endRoll.p}` : shiftType.split(' - ')[1]) : null;
 
-    // THE FIX: Automatically extract the Outward Code (e.g. CF10) from the 'from' autocomplete string
     const extractedOutwardCode = from.trim().split(' ')[0].toUpperCase().substring(0, 4);
 
     const { error } = await supabase.from('rides').insert([{
@@ -155,10 +250,10 @@ export default function DriverHomePage() {
       vehicle: profile.vehicle_details || 'Standard Car',
       outward_code: extractedOutwardCode, 
       destination_hub: to, 
-      shift_type: shiftType === 'Custom' ? savedCustomString : shiftType,
-      departure_time: finalDep,
+      shift_type: finalDep, // Ensures exact match
+      departure_time: finalDep, // Ensures exact match
       return_time: finalRet,
-      trip_type: tripType, // Now safely sends 'two_way' or 'one_way'
+      trip_type: tripType,
       ride_date: rideDate,
       price: parseFloat(price),
       total_seats_capacity: parseInt(seatsAvailable), 
@@ -272,12 +367,14 @@ export default function DriverHomePage() {
             <div>
               <label className="text-[10px] font-bold uppercase text-gray-400 mb-2 block pl-1">Travel Date</label>
               <div className="flex gap-2 h-11">
-                <button type="button" onClick={() => setDateSelection('today')} className={`flex-1 text-xs font-bold rounded-xl border transition-all ${dateSelection === 'today' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 shadow-sm' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>Today</button>
-                <button type="button" onClick={() => setDateSelection('tomorrow')} className={`flex-1 text-xs font-bold rounded-xl border transition-all ${dateSelection === 'tomorrow' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 shadow-sm' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>Tomorrow</button>
-                <button type="button" onClick={openCalendar} className={`flex-1 flex items-center justify-center gap-1 text-xs font-bold rounded-xl border transition-all ${dateSelection === 'specific' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 shadow-sm' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
-                  <CalendarDays className="h-4 w-4" /> Calendar
+                <button type="button" onClick={() => setDateSelection('today')} className={`flex-1 text-xs font-bold rounded-xl border transition-all ${dateSelection === 'today' ? 'border-gray-900 bg-gray-900 text-white shadow-sm' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>Today</button>
+                <button type="button" onClick={() => setDateSelection('tomorrow')} className={`flex-1 text-xs font-bold rounded-xl border transition-all ${dateSelection === 'tomorrow' ? 'border-gray-900 bg-gray-900 text-white shadow-sm' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>Tomorrow</button>
+                
+                {/* PROFESSIONAL CALENDAR BUTTON (Replaces native input) */}
+                <button type="button" onClick={() => setShowCalendarModal(true)} className={`flex-1 flex items-center justify-center gap-1 text-xs font-bold rounded-xl border transition-all ${dateSelection === 'specific' ? 'border-gray-900 bg-gray-900 text-white shadow-sm' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+                  <CalendarDays className="h-4 w-4" /> 
+                  {dateSelection === 'specific' && specificDate ? formatDisplayDate(specificDate) : 'Calendar'}
                 </button>
-                <input ref={dateInputRef} type="date" min={new Date().toISOString().split('T')[0]} value={specificDate} onChange={(e) => { setSpecificDate(e.target.value); setDateSelection('specific'); }} className="absolute w-0 h-0 opacity-0 pointer-events-none" />
               </div>
             </div>
 
@@ -285,7 +382,7 @@ export default function DriverHomePage() {
               <label className="text-[10px] font-bold uppercase text-gray-400 mb-2 block pl-1">Shift Timings</label>
               <div className="grid grid-cols-2 gap-2">
                 {predefinedShifts.map((s) => (
-                  <button key={s} type="button" onClick={() => handleShiftSelect(s)} className={`px-2 py-3 text-sm font-bold rounded-xl border transition-all ${shiftType === s ? "border-emerald-600 bg-emerald-600 text-white shadow-md" : "border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100"}`}>
+                  <button key={s} type="button" onClick={() => handleShiftSelect(s)} className={`px-2 py-3 text-sm font-bold rounded-xl border transition-all ${shiftType === s ? "border-gray-900 bg-gray-900 text-white shadow-md" : "border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100"}`}>
                     {s === "Custom" && savedCustomString ? savedCustomString : s}
                   </button>
                 ))}
@@ -304,7 +401,7 @@ export default function DriverHomePage() {
             </div>
           </div>
 
-          <button type="submit" disabled={isSubmitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-gray-900 py-4 text-sm font-bold text-white shadow-md hover:bg-gray-800 active:scale-[0.98] disabled:opacity-70 transition-all mt-4">
+          <button type="submit" disabled={isSubmitting || !todayStr} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-4 text-sm font-bold text-white shadow-md hover:bg-emerald-700 active:scale-[0.98] disabled:opacity-70 transition-all mt-4">
             {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <ShieldCheck className="h-5 w-5" />}
             {isSubmitting ? "Publishing..." : "Publish Route"}
           </button>
@@ -312,14 +409,54 @@ export default function DriverHomePage() {
         </form>
       </main>
 
-      {/* --- THE FIX: CENTERED IOS-STYLE TIME MODAL --- */}
+      {/* --- PROFESSIONAL CALENDAR MODAL --- */}
+      {showCalendarModal && (
+        <div className="fixed inset-0 z-[100] flex items-end justify-center bg-gray-900/60 backdrop-blur-sm sm:items-center p-0 sm:p-4 animate-in fade-in">
+          <div className="bg-white w-full max-w-md rounded-t-[40px] sm:rounded-[32px] p-6 pb-8 shadow-2xl animate-in slide-in-from-bottom-10 sm:slide-in-from-bottom-0 sm:zoom-in-95">
+            
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h3 className="font-black text-gray-900 text-xl tracking-tight">Select Date</h3>
+                <p className="text-xs font-bold text-gray-500 mt-1 uppercase tracking-widest">When is your shift?</p>
+              </div>
+              <button type="button" onClick={() => setShowCalendarModal(false)} className="h-10 w-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-500 hover:bg-gray-200 transition-colors"><X className="h-5 w-5" /></button>
+            </div>
+
+            <div className="mb-6">
+              <div className="flex justify-between items-center mb-4 px-2">
+                <button type="button" onClick={() => setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1))} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ChevronLeft className="h-5 w-5 text-gray-600" /></button>
+                <h4 className="font-black text-lg text-gray-900">
+                  {calendarViewDate.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}
+                </h4>
+                <button type="button" onClick={() => setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1))} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ChevronRight className="h-5 w-5 text-gray-600" /></button>
+              </div>
+
+              <div className="grid grid-cols-7 gap-1 mb-2 text-center">
+                {['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map(day => (
+                  <div key={day} className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{day}</div>
+                ))}
+              </div>
+              
+              <div className="grid grid-cols-7 gap-1 justify-items-center">
+                {generateCalendarGrid()}
+              </div>
+            </div>
+
+            <button type="button" onClick={() => setShowCalendarModal(false)} className="w-full bg-gray-100 text-gray-600 font-bold py-4 rounded-2xl hover:bg-gray-200 transition-colors active:scale-95">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* --- TIME MODAL --- */}
       {isCustomModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 animate-in fade-in">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in zoom-in-95">
             <div className="flex justify-between items-center mb-6">
               <div>
                 <h3 className="font-bold text-gray-900 text-xl tracking-tight">Set Shift Time</h3>
-                <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest mt-1">
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-1">
                   {tripType === 'two_way' ? (timeStep === 'start' ? '1. Departure Time' : '2. Return Time') : 'Departure Time'}
                 </p>
               </div>
@@ -329,7 +466,6 @@ export default function DriverHomePage() {
             <div className="flex gap-4 justify-center items-center bg-gray-50 p-4 rounded-2xl border border-gray-200 mb-6 h-48 relative overflow-hidden mask-image-fade shadow-inner">
               <div className="absolute top-1/2 -translate-y-1/2 w-[80%] h-12 bg-white rounded-xl shadow-sm border border-gray-200 z-0" />
               
-              {/* HOURS ROLLER */}
               <div className="h-full w-16 overflow-y-auto snap-y snap-mandatory scrollbar-hide z-10" style={{ padding: '72px 0' }}>
                 {ROLLER_HOURS.map(h => {
                   const currentVal = timeStep === 'start' ? startRoll.h : endRoll.h;
@@ -340,7 +476,6 @@ export default function DriverHomePage() {
               </div>
               <span className="text-2xl font-bold text-gray-300 z-10">:</span>
               
-              {/* MINUTES ROLLER */}
               <div className="h-full w-16 overflow-y-auto snap-y snap-mandatory scrollbar-hide z-10" style={{ padding: '72px 0' }}>
                 {ROLLER_MINUTES.map(m => {
                   const currentVal = timeStep === 'start' ? startRoll.m : endRoll.m;
@@ -350,7 +485,6 @@ export default function DriverHomePage() {
                 })}
               </div>
 
-              {/* AM/PM ROLLER */}
               <div className="h-full w-16 overflow-y-auto snap-y snap-mandatory scrollbar-hide z-10" style={{ padding: '72px 0' }}>
                 {ROLLER_AMPM.map(p => {
                   const currentVal = timeStep === 'start' ? startRoll.p : endRoll.p;
