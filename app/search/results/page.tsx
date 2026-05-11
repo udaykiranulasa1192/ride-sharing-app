@@ -526,7 +526,7 @@ function ResultsLogic() {
                       disabled={actionLoadingId === 'cancel_broadcast'}
                       className="flex-1 bg-red-50 text-red-600 border border-red-100 font-black py-3 rounded-xl hover:bg-red-100 transition-all flex justify-center items-center gap-2 disabled:opacity-50"
                      >
-                      {actionLoadingId === 'cancel_broadcast' ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />} Revoke
+                      {actionLoadingId === 'cancel_broadcast' ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />} Cancel
                      </button>
                    </div>
                 </div>
@@ -543,7 +543,7 @@ function ResultsLogic() {
                 </div>
                 <h3 className="font-black text-gray-900 text-xl tracking-tight">Request Available Drivers</h3>
                 <p className="text-gray-500 text-sm leading-relaxed mt-1">
-                  No drivers found. Broadcast your route and drivers will claim it.
+                  No drivers found. Search for Drivers.
                 </p>
               </div>
 
