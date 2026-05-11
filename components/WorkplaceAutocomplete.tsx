@@ -2,13 +2,13 @@
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
-import { Navigation, MapPin } from "lucide-react";
+import { Navigation, MapPin,Briefcase } from "lucide-react";
 
 interface WorkplaceAutocompleteProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
-  icon?: 'map-pin' | 'navigation';
+  icon?: 'map-pin' | 'navigation' | 'briefcase';
 }
 
 export default function WorkplaceAutocomplete({ 
@@ -23,7 +23,14 @@ export default function WorkplaceAutocomplete({
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   // THE FIX: We define IconComponent right here!
-  const IconComponent = icon === 'map-pin' ? MapPin : Navigation;
+ // THE FIX: Object mapping for a cleaner look
+  const icons = {
+    'map-pin': MapPin,
+    'navigation': Navigation,
+    'briefcase': Briefcase
+  };
+  
+  const IconComponent = icons[icon] || Navigation;
 
   // 1. SILENT BACKGROUND FETCH
   useEffect(() => {

@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { Loader2, Phone, Mail, Lock, User, Car, Hash, MapPin, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+
 // 1. Define exactly what props this component is allowed to accept
 interface DriverAuthFormProps {
   onSuccess: () => void | Promise<boolean>; 
@@ -61,12 +62,27 @@ export default function DriverAuthForm({ onSuccess }: DriverAuthFormProps) {
           return;
         }
 
+        const fullPhoneNumber = `+44${mobile}`; 
+
+        // --- NEW: DUPLICATE MOBILE CHECK ---
+        const { data: existingPassengerMobile } = await supabase.from('passenger_profiles').select('id').eq('mobile_number', fullPhoneNumber).maybeSingle();
+        const { data: existingDriverMobile } = await supabase.from('driver_profiles').select('id').eq('mobile_number', fullPhoneNumber).maybeSingle();
+        
+        if (existingPassengerMobile || existingDriverMobile) {
+          throw new Error("This mobile number is already registered to an existing account.");
+        }
+
         const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
-        if (authError) throw authError;
+        
+        if (authError) {
+          // Make default Supabase error cleaner
+          if (authError.message.includes("User already registered")) {
+            throw new Error("This email address is already in use. Please log in instead.");
+          }
+          throw authError;
+        }
 
         if (authData.user) {
-          const fullPhoneNumber = `+44${mobile}`; 
-
           const { error: profileError } = await supabase.from('driver_profiles').insert([{
             id: authData.user.id,
             first_name: firstName.trim(),
@@ -80,8 +96,24 @@ export default function DriverAuthForm({ onSuccess }: DriverAuthFormProps) {
           if (profileError) throw profileError;
         }
       } else {
-        const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
-        if (authError) throw authError;
+        // --- LOGIN FLOW ---
+        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password });
+        if (authError) throw new Error("Invalid email or password.");
+
+        // --- NEW: ROLE ENFORCEMENT (SECURITY CHECK) ---
+        if (authData.user) {
+          const { data: driverProfile } = await supabase
+            .from('driver_profiles')
+            .select('id')
+            .eq('id', authData.user.id)
+            .maybeSingle();
+
+          if (!driverProfile) {
+            // Not a driver (they are a passenger). Sign out immediately!
+            await supabase.auth.signOut();
+            throw new Error("Access Denied: You are registered as a Passenger. Please use the Passenger App to log in.");
+          }
+        }
       }
       
       onSuccess();
@@ -109,15 +141,13 @@ export default function DriverAuthForm({ onSuccess }: DriverAuthFormProps) {
         </Link>
 
         {/* Explicit Back Button */}
-{/* Explicit Back Button */}
-<button 
-  onClick={() => router.back()} 
-  className="p-2 rounded-full hover:bg-gray-200 text-gray-500 transition-colors"
-  type="button"
->
-  <ArrowLeft className="h-5 w-5" />
-</button>       
-
+        <button 
+          onClick={() => router.back()} 
+          className="p-2 rounded-full hover:bg-gray-200 text-gray-500 transition-colors"
+          type="button"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </button>       
       </div>
 
       <div className="p-6">
@@ -127,8 +157,8 @@ export default function DriverAuthForm({ onSuccess }: DriverAuthFormProps) {
 
         {/* Toggle between Login and Signup */}
         <div className="flex rounded-xl bg-gray-100 p-1 mb-6">
-          <button onClick={() => setAuthMode('login')} type="button" className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${authMode === 'login' ? 'bg-white shadow-sm text-emerald-700' : 'text-gray-500'}`}>Log In</button>
-          <button onClick={() => setAuthMode('signup')} type="button" className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${authMode === 'signup' ? 'bg-white shadow-sm text-emerald-700' : 'text-gray-500'}`}>Sign Up</button>
+          <button onClick={() => { setAuthMode('login'); setErrorMsg(""); }} type="button" className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${authMode === 'login' ? 'bg-white shadow-sm text-emerald-700' : 'text-gray-500'}`}>Log In</button>
+          <button onClick={() => { setAuthMode('signup'); setErrorMsg(""); }} type="button" className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${authMode === 'signup' ? 'bg-white shadow-sm text-emerald-700' : 'text-gray-500'}`}>Sign Up</button>
         </div>
 
         {errorMsg && <div className="mb-4 p-3 bg-red-50 text-red-600 text-xs font-medium rounded-lg text-center">{errorMsg}</div>}

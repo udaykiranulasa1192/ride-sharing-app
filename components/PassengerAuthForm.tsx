@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Phone, Mail, Lock, User, MapPin, ArrowLeft, Car } from "lucide-react";
+import { Loader2, Phone, Mail, Lock, User, MapPin, ArrowLeft, Car, Briefcase } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import WorkplaceAutocomplete from "@/components/WorkplaceAutocomplete";
 
 interface PassengerAuthFormProps {
   onSuccess: () => void;
@@ -23,6 +24,7 @@ export default function PassengerAuthForm({ onSuccess }: PassengerAuthFormProps)
   const [lastName, setLastName] = useState("");
   const [mobile, setMobile] = useState("");
   const [postcode, setPostcode] = useState("");
+  const [workLocation, setWorkLocation] = useState(""); 
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value.replace(/\D/g, '').slice(0, 10);
@@ -43,22 +45,54 @@ export default function PassengerAuthForm({ onSuccess }: PassengerAuthFormProps)
 
     try {
       if (authMode === 'signup') {
+        const fullPhoneNumber = `+44${mobile}`;
+        
+        // --- DUPLICATE MOBILE CHECK ---
+        const { data: existingPassengerMobile } = await supabase.from('passenger_profiles').select('id').eq('mobile_number', fullPhoneNumber).maybeSingle();
+        const { data: existingDriverMobile } = await supabase.from('driver_profiles').select('id').eq('mobile_number', fullPhoneNumber).maybeSingle();
+        
+        if (existingPassengerMobile || existingDriverMobile) {
+          throw new Error("This mobile number is already registered to an existing account.");
+        }
+
         const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
-        if (authError) throw authError;
+        
+        if (authError) {
+          if (authError.message.includes("User already registered")) {
+            throw new Error("This email address is already in use. Please log in instead.");
+          }
+          throw authError;
+        }
 
         if (authData.user) {
           const { error: profileError } = await supabase.from('passenger_profiles').insert([{
             id: authData.user.id,
             first_name: firstName.trim(),
             last_name: lastName.trim(),
-            mobile_number: `+44${mobile}`,
-            postcode: postcode.toUpperCase()
+            mobile_number: fullPhoneNumber,
+            postcode: postcode.toUpperCase(),
+            work_location: workLocation || null 
           }]);
           if (profileError) throw profileError;
         }
       } else {
-        const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
-        if (authError) throw authError;
+        // --- LOGIN FLOW ---
+        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password });
+        if (authError) throw new Error("Invalid email or password.");
+
+        // --- ROLE ENFORCEMENT (SECURITY CHECK) ---
+        if (authData.user) {
+          const { data: passengerProfile } = await supabase
+            .from('passenger_profiles')
+            .select('id')
+            .eq('id', authData.user.id)
+            .maybeSingle();
+
+          if (!passengerProfile) {
+            await supabase.auth.signOut();
+            throw new Error("Access Denied: You are registered as a Driver. Please use the Driver App to log in.");
+          }
+        }
       }
       onSuccess();
     } catch (err: any) {
@@ -71,7 +105,7 @@ export default function PassengerAuthForm({ onSuccess }: PassengerAuthFormProps)
   const inputClass = "w-full rounded-xl border border-gray-200 bg-gray-50 py-3 pr-4 text-sm text-gray-900 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all placeholder:text-gray-400";
 
   return (
-    <div className="bg-white rounded-[32px] border border-gray-100 shadow-2xl max-w-md mx-auto w-full relative overflow-hidden">
+    <div className="bg-white rounded-[32px] border border-gray-100 shadow-2xl max-w-md mx-auto w-full relative overflow-visible">
       <div className="bg-gray-50/50 border-b border-gray-100 p-5 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2">
             <div className="h-8 w-8 rounded-lg bg-emerald-600 flex items-center justify-center shadow-md">
@@ -79,7 +113,7 @@ export default function PassengerAuthForm({ onSuccess }: PassengerAuthFormProps)
             </div>
             <span className="text-lg font-black text-gray-900 tracking-tight">ShiftPool</span>
         </Link>
-        <button onClick={() => router.back()} className="p-2 rounded-full hover:bg-gray-200 text-gray-400 transition-colors">
+        <button type="button" onClick={() => router.back()} className="p-2 rounded-full hover:bg-gray-200 text-gray-400 transition-colors">
           <ArrowLeft className="h-5 w-5" />
         </button>
       </div>
@@ -90,8 +124,8 @@ export default function PassengerAuthForm({ onSuccess }: PassengerAuthFormProps)
         </h2>
 
         <div className="flex rounded-2xl bg-gray-100 p-1.5 mb-8">
-          <button onClick={() => setAuthMode('login')} className={`flex-1 py-2.5 text-xs font-black rounded-xl transition-all ${authMode === 'login' ? 'bg-white shadow-md text-emerald-600' : 'text-gray-400'}`}>LOG IN</button>
-          <button onClick={() => setAuthMode('signup')} className={`flex-1 py-2.5 text-xs font-black rounded-xl transition-all ${authMode === 'signup' ? 'bg-white shadow-md text-emerald-600' : 'text-gray-400'}`}>SIGN UP</button>
+          <button type="button" onClick={() => { setAuthMode('login'); setErrorMsg(""); }} className={`flex-1 py-2.5 text-xs font-black rounded-xl transition-all ${authMode === 'login' ? 'bg-white shadow-md text-emerald-600' : 'text-gray-400'}`}>LOG IN</button>
+          <button type="button" onClick={() => { setAuthMode('signup'); setErrorMsg(""); }} className={`flex-1 py-2.5 text-xs font-black rounded-xl transition-all ${authMode === 'signup' ? 'bg-white shadow-md text-emerald-600' : 'text-gray-400'}`}>SIGN UP</button>
         </div>
 
         {errorMsg && <div className="mb-6 p-4 bg-red-50 text-red-600 text-xs font-bold rounded-xl text-center border border-red-100">{errorMsg}</div>}
@@ -109,14 +143,27 @@ export default function PassengerAuthForm({ onSuccess }: PassengerAuthFormProps)
                   <input required placeholder="Last Name" value={lastName} onChange={e => setLastName(e.target.value)} className={`${inputClass} pl-10`} />
                 </div>
               </div>
+              
               <div className="relative flex items-center">
                 <Phone className="absolute left-3 h-5 w-5 text-emerald-500 z-10" />
                 <span className="absolute left-10 text-gray-400 font-bold z-10 pr-2 border-r border-gray-200">+44</span>
-                <input required type="tel" placeholder="7700..." value={mobile} onChange={handlePhoneChange} className={`${inputClass} pl-20`} />
+                <input required type="tel" placeholder="7700985434" value={mobile} onChange={handlePhoneChange} className={`${inputClass} pl-20`} />
               </div>
+
+              {/* POSTCODE ON ITS OWN LINE */}
               <div className="relative">
                 <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-emerald-500" />
                 <input required placeholder="Postcode" value={postcode} onChange={handlePostcodeChange} className={`${inputClass} pl-10 uppercase font-bold`} />
+              </div>
+              
+              {/* WORKPLACE ON ITS OWN LINE - z-50 ensures dropdown goes over email/password */}
+              <div className="relative z-50">
+                <WorkplaceAutocomplete 
+                  value={workLocation} 
+                  onChange={setWorkLocation} 
+                  placeholder="Workplace (Optional)" 
+                  icon="briefcase" 
+                />
               </div>
             </div>
           )}
