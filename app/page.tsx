@@ -33,7 +33,7 @@ export default function Home() {
             className="group w-full flex items-center justify-center gap-3 bg-emerald-600 text-white py-5 px-6 rounded-2xl text-lg font-semibold transition-all duration-200 hover:bg-emerald-700 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 shadow-md shadow-emerald-600/20"
           >
             <Users className="w-5 h-5" />
-            Find Shift
+            Passenger
           </Link>
 
           <Link
