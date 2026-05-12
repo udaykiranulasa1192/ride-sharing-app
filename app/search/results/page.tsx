@@ -164,17 +164,24 @@ function ResultsLogic() {
         .eq('departure_time', shift) // EXACT match restored
         .ilike('destination_hub', `%${to.trim()}%`);
 
-      if (allRidesData) {
+   if (allRidesData) {
         // SMART FILTER: Show the ride IF it has enough seats OR if the user is already matched to it!
         const validRides = allRidesData.filter(ride => 
           ride.remaining_seats >= totalSeatsNeeded || !!statusMap[String(ride.id)]
         );
 
-        const pricedRides = validRides.map(ride => ({
-          ...ride,
-          dynamic_price: finalCalculatedFare,
-          pricing_method: pricingMethod
-        }));
+        const pricedRides = validRides.map(ride => {
+          // THE FIX: If the driver set a price, use it (Price per seat * Total Seats Needed)
+          // Otherwise, fall back to the system's calculated fare.
+          const driverTotalFare = ride.price ? (ride.price * totalSeatsNeeded) : finalCalculatedFare;
+          
+          return {
+            ...ride,
+            dynamic_price: driverTotalFare,
+            pricing_method: ride.price ? 'driver_set' : pricingMethod
+          };
+        });
+        
         setRides(pricedRides);
       }
 

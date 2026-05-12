@@ -27,12 +27,13 @@ import PassengerBottomNav from "@/components/PassengerBottomNav";
 import { supabase } from "@/lib/supabase";
 
 const PRESET_SHIFTS = [
+  "Custom",
+  "9AM - 1PM",
   "6AM - 2PM",
   "2PM - 10PM",
   "10PM - 6AM",
   "6AM - 6PM",
-  "8AM - 4PM",
-  "Custom"
+  "8AM - 4PM"
 ];
 
 const HOURS = Array.from({ length: 12 }, (_, i) => (i + 1).toString().padStart(2, '0'));
@@ -73,7 +74,6 @@ const checkOverlap = (shift1: string, shift2: string) => {
   return Math.max(s1.start, s2.start) < Math.min(s1.end, s2.end);
 };
 
-// THE FIX: Forces Local Timezone formatting to prevent UTC day-shifting!
 const getFormattedDate = (date: Date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -104,7 +104,7 @@ export default function SearchPage() {
   const [calendarViewDate, setCalendarViewDate] = React.useState(new Date());
   
   const [tripType, setTripType] = React.useState<'round_trip' | 'one_way'>('round_trip'); 
-  const [shift, setShift] = React.useState("6AM - 2PM");
+  const [shift, setShift] = React.useState("Custom");
   
   const [showTimeModal, setShowTimeModal] = React.useState(false);
   const [timeStep, setTimeStep] = React.useState<'start' | 'end'>('start');
@@ -117,6 +117,42 @@ export default function SearchPage() {
   const [cancellingId, setCancellingId] = React.useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = React.useState<string | null>(null);
 
+  const hourRef = React.useRef<HTMLDivElement>(null);
+  const minuteRef = React.useRef<HTMLDivElement>(null);
+  const ampmRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (showTimeModal) {
+      setTimeout(() => {
+        const h = timeStep === 'start' ? customStart.h : customEnd.h;
+        const m = timeStep === 'start' ? customStart.m : customEnd.m;
+        const p = timeStep === 'start' ? customStart.p : customEnd.p;
+        if (hourRef.current) hourRef.current.scrollTop = HOURS.indexOf(h) * 48;
+        if (minuteRef.current) minuteRef.current.scrollTop = MINUTES.indexOf(m) * 48;
+        if (ampmRef.current) ampmRef.current.scrollTop = AMPM.indexOf(p) * 48;
+      }, 10);
+    }
+  }, [showTimeModal, timeStep]); 
+
+  const handleRollerScroll = (e: React.UIEvent<HTMLDivElement>, type: 'h' | 'm' | 'p') => {
+    const index = Math.round(e.currentTarget.scrollTop / 48);
+    
+    if (type === 'h' && HOURS[index]) {
+      timeStep === 'start' ? setCustomStart(prev => ({...prev, h: HOURS[index]})) : setCustomEnd(prev => ({...prev, h: HOURS[index]}));
+    }
+    if (type === 'm' && MINUTES[index]) {
+      timeStep === 'start' ? setCustomStart(prev => ({...prev, m: MINUTES[index]})) : setCustomEnd(prev => ({...prev, m: MINUTES[index]}));
+    }
+    if (type === 'p' && AMPM[index]) {
+      timeStep === 'start' ? setCustomStart(prev => ({...prev, p: AMPM[index]})) : setCustomEnd(prev => ({...prev, p: AMPM[index]}));
+    }
+  };
+
+  // 1. THE FIX: Added `| null` to the RefObject to satisfy strict TypeScript rules
+  const handleScrollTo = (ref: React.RefObject<HTMLDivElement | null>, index: number) => {
+    if (ref.current) ref.current.scrollTo({ top: index * 48, behavior: 'smooth' });
+  };
+
   React.useEffect(() => {
     setSelectedDate(getFormattedDate(todayDate));
 
@@ -124,16 +160,24 @@ export default function SearchPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setCurrentUserId(user.id);
+        
+        // 2. THE FIX: We are now pulling `work_location` from the database
         const { data: profile } = await supabase
           .from('passenger_profiles')
-          .select('postcode, home_latitude, home_longitude')
+          .select('postcode, home_latitude, home_longitude, work_location')
           .eq('id', user.id)
           .single();
 
-        if (profile && profile.postcode) {
-          setFrom(profile.postcode);
-          setFromLat(profile.home_latitude);
-          setFromLng(profile.home_longitude);
+        if (profile) {
+          if (profile.postcode) {
+            setFrom(profile.postcode);
+            setFromLat(profile.home_latitude);
+            setFromLng(profile.home_longitude);
+          }
+          // Automatically set the "Going To" destination to their saved work location!
+          if (profile.work_location) {
+            setTo(profile.work_location);
+          }
         }
 
         const { data: openReqs } = await supabase
@@ -651,28 +695,29 @@ export default function SearchPage() {
               <button onClick={() => setShowTimeModal(false)} className="h-8 w-8 bg-gray-100 rounded-full flex items-center justify-center text-gray-500 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"><X className="h-4 w-4" /></button>
             </div>
 
-            <div className="flex gap-4 justify-center items-center bg-gray-50 p-4 rounded-3xl border border-gray-100 mb-6 h-48 relative overflow-hidden mask-image-fade">
+            <div className="flex gap-4 justify-center items-center bg-gray-50 p-4 rounded-3xl border border-gray-100 mb-6 h-48 relative overflow-hidden mask-image-fade shadow-inner">
+              
               <div className="absolute top-1/2 -translate-y-1/2 w-[80%] h-12 bg-white rounded-xl shadow-sm border border-gray-200 pointer-events-none z-0" />
               
-              <div className="h-full w-20 overflow-y-auto snap-y snap-mandatory scrollbar-hide z-10 scroll-smooth relative" style={{ padding: '72px 0' }}>
-                {HOURS.map(h => {
+              <div ref={hourRef} onScroll={(e) => handleRollerScroll(e, 'h')} className="h-full w-20 overflow-y-auto snap-y snap-mandatory scrollbar-hide z-10 scroll-smooth relative" style={{ padding: '72px 0' }}>
+                {HOURS.map((h, i) => {
                   const isSelected = (timeStep === 'start' ? customStart.h : customEnd.h) === h;
-                  return <div key={`h-${h}`} onClick={() => timeStep === 'start' ? setCustomStart({...customStart, h}) : setCustomEnd({...customEnd, h})} className={`h-12 snap-center flex items-center justify-center cursor-pointer transition-all ${isSelected ? 'text-3xl font-black text-emerald-600' : 'text-xl font-bold text-gray-400 hover:text-gray-600'}`}>{h}</div>
+                  return <div key={`h-${h}`} onClick={() => handleScrollTo(hourRef, i)} className={`h-12 snap-center flex items-center justify-center cursor-pointer transition-all ${isSelected ? 'text-3xl font-black text-emerald-600' : 'text-xl font-bold text-gray-400 hover:text-gray-600'}`}>{h}</div>
                 })}
               </div>
               <span className="text-2xl font-black text-gray-300 pb-1 z-10">:</span>
               
-              <div className="h-full w-20 overflow-y-auto snap-y snap-mandatory scrollbar-hide z-10 scroll-smooth relative" style={{ padding: '72px 0' }}>
-                {MINUTES.map(m => {
+              <div ref={minuteRef} onScroll={(e) => handleRollerScroll(e, 'm')} className="h-full w-20 overflow-y-auto snap-y snap-mandatory scrollbar-hide z-10 scroll-smooth relative" style={{ padding: '72px 0' }}>
+                {MINUTES.map((m, i) => {
                   const isSelected = (timeStep === 'start' ? customStart.m : customEnd.m) === m;
-                  return <div key={`m-${m}`} onClick={() => timeStep === 'start' ? setCustomStart({...customStart, m}) : setCustomEnd({...customEnd, m})} className={`h-12 snap-center flex items-center justify-center cursor-pointer transition-all ${isSelected ? 'text-3xl font-black text-emerald-600' : 'text-xl font-bold text-gray-400 hover:text-gray-600'}`}>{m}</div>
+                  return <div key={`m-${m}`} onClick={() => handleScrollTo(minuteRef, i)} className={`h-12 snap-center flex items-center justify-center cursor-pointer transition-all ${isSelected ? 'text-3xl font-black text-emerald-600' : 'text-xl font-bold text-gray-400 hover:text-gray-600'}`}>{m}</div>
                 })}
               </div>
 
-              <div className="h-full w-20 overflow-y-auto snap-y snap-mandatory scrollbar-hide z-10 scroll-smooth relative" style={{ padding: '72px 0' }}>
-                {AMPM.map(p => {
+              <div ref={ampmRef} onScroll={(e) => handleRollerScroll(e, 'p')} className="h-full w-20 overflow-y-auto snap-y snap-mandatory scrollbar-hide z-10 scroll-smooth relative" style={{ padding: '72px 0' }}>
+                {AMPM.map((p, i) => {
                   const isSelected = (timeStep === 'start' ? customStart.p : customEnd.p) === p;
-                  return <div key={`p-${p}`} onClick={() => timeStep === 'start' ? setCustomStart({...customStart, p}) : setCustomEnd({...customEnd, p})} className={`h-12 snap-center flex items-center justify-center cursor-pointer transition-all ${isSelected ? 'text-2xl font-black text-emerald-600' : 'text-lg font-bold text-gray-400 hover:text-gray-600'}`}>{p}</div>
+                  return <div key={`p-${p}`} onClick={() => handleScrollTo(ampmRef, i)} className={`h-12 snap-center flex items-center justify-center cursor-pointer transition-all ${isSelected ? 'text-2xl font-black text-emerald-600' : 'text-lg font-bold text-gray-400 hover:text-gray-600'}`}>{p}</div>
                 })}
               </div>
             </div>
