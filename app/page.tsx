@@ -37,7 +37,7 @@ export default function Home() {
           </Link>
 
           <Link
-  href="/driver/login" // <-- CHANGED THIS
+  href="/driver" // <-- CHANGED THIS
   className="group w-full flex items-center justify-center gap-3 bg-white text-gray-800 py-5 px-6 rounded-2xl text-lg font-semibold border-2 border-gray-200 transition-all duration-200 hover:bg-gray-50 hover:border-gray-300 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-gray-200 focus:ring-offset-2"
 >
   <Car className="w-5 h-5 text-emerald-600" />
