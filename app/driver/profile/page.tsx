@@ -44,7 +44,7 @@ export default function DriverProfile() {
   async function fetchProfile() {
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) {
-      router.push("/driver/login");
+      router.push("/driver");
       return;
     }
 
