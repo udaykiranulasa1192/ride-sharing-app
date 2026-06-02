@@ -94,8 +94,9 @@ export default function JobsBoard() {
     setProcessingId(bundle.id);
     const { data: { user } } = await supabase.auth.getUser();
     
-    if (!user) {
+   if (!user) {
       setProcessingId(null);
+      router.push("/driver");
       return;
     }
 

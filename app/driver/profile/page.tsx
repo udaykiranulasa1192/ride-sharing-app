@@ -134,7 +134,7 @@ export default function DriverProfile() {
 
       <main className="max-w-md mx-auto p-4 space-y-4">
         {/* Profile Card Header */}
-        <div className="bg-emerald-600 rounded-3xl p-6 text-white text-center shadow-lg relative overflow-hidden">
+        <div className="bg-gray-900 rounded-3xl p-6 text-white text-center shadow-lg relative overflow-hidden">
           <div className="h-20 w-20 bg-white rounded-full mx-auto flex items-center justify-center mb-3 shadow-inner relative z-10">
             <User className="h-10 w-10 text-emerald-600" />
           </div>
@@ -183,7 +183,7 @@ export default function DriverProfile() {
 
         {/* Details / Edit Form */}
         <div className="bg-white rounded-3xl border border-gray-200 p-5 shadow-sm space-y-5">
-          <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 px-3 py-2 rounded-lg text-sm font-bold w-fit">
+          <div className="flex items-center gap-2 text-gray-900 bg-gray-100 px-3 py-2 rounded-lg text-sm font-bold w-fit">
             <ShieldCheck className="h-5 w-5" /> Verified Driver
           </div>
 

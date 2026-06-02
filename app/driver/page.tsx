@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import DriverNav from "@/components/DriverNav";
-import PassengerAuthForm from "@/components/PassengerAuthForm";
+import DriverAuthForm from "@/components/DriverAuthForm";
 
 const predefinedShifts = [
   "6AM - 2PM",
@@ -126,7 +126,7 @@ export default function DriverHomePage() {
     setLoadingProfile(true);
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     
-    if (authError || !user) {
+   if (authError || !user) {
       setIsLoggedIn(false);
       setLoadingProfile(false);
       return;
@@ -289,7 +289,7 @@ export default function DriverHomePage() {
         <h2 className="text-2xl font-bold text-gray-900 mb-2">Publish a Route</h2>
         <p className="text-gray-500 text-sm mb-10">Sign in to offer empty seats and earn money.</p>
         <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-           <PassengerAuthForm onSuccess={checkUser} />
+           <DriverAuthForm onSuccess={checkUser} />
         </div>
       </div>
       <DriverNav />

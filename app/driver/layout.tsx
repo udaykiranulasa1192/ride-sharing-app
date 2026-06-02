@@ -1,4 +1,4 @@
-import DriverNav from "@/components/DriverNav";
+import Navbar from "@/components/Navbar";
 
 export default function DriverLayout({
   children,
@@ -6,10 +6,12 @@ export default function DriverLayout({
   children: React.ReactNode;
 }) {
   return (
-    <>
-      <main>{children}</main>
-      {/* This bottom nav only shows for drivers */}
-      <DriverNav />
-    </>
+    <div className="min-h-screen bg-gray-50">
+      {/* Navbar will show on all driver pages */}
+      <Navbar />
+      
+      {/* This is where your driver pages will render */}
+      {children}
+    </div>
   );
 }

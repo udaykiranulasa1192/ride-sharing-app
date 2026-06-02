@@ -24,9 +24,10 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import DriverNav from "@/components/DriverNav";
-import PassengerAuthForm from "@/components/PassengerAuthForm"; 
+import { useRouter } from "next/navigation";
 
 export default function DriverDashboard() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
@@ -57,9 +58,8 @@ export default function DriverDashboard() {
       setLoading(true);
       const { data: { user }, error: authError } = await supabase.auth.getUser();
       
-      if (authError || !user) {
-        setIsLoggedIn(false);
-        setLoading(false);
+     if (authError || !user) {
+        router.push("/driver");
         return;
       }
 
@@ -225,21 +225,7 @@ export default function DriverDashboard() {
     </div>
   );
 
-  if (!isLoggedIn) return (
-    <div className="min-h-screen bg-gray-50 pb-32">
-      <div className="max-w-md mx-auto pt-20 px-6 text-center animate-in fade-in slide-in-from-bottom-4">
-        <div className="h-24 w-24 bg-white border-2 border-emerald-100 rounded-[2rem] flex items-center justify-center mx-auto mb-8 shadow-xl shadow-emerald-600/10 rotate-3">
-            <Car className="h-12 w-12 text-emerald-600 -rotate-3" />
-        </div>
-        <h2 className="text-4xl font-black text-gray-900 mb-3 tracking-tight">Driver Portal</h2>
-        <p className="text-gray-500 text-sm font-medium mb-10 leading-relaxed">Sign in to manage your routes, accept passengers, and track your earnings.</p>
-        <div className="bg-white p-6 rounded-[2rem] shadow-xl shadow-gray-200/50 border border-gray-100">
-          <PassengerAuthForm onSuccess={fetchDashboardData} />
-        </div>
-      </div>
-      <DriverNav />
-    </div>
-  );
+if (!isLoggedIn) return null; // The router will instantly redirect them
 
   return (
     <div className="min-h-screen bg-gray-50 pb-32 relative">
