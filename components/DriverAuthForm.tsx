@@ -76,13 +76,13 @@ export default function DriverAuthForm({ onSuccess }: DriverAuthFormProps) {
           throw authError;
         }
 
-        if (authData.user) {
+       if (authData.user) {
           const { error: profileError } = await supabase.from('driver_profiles').insert([{
             id: authData.user.id,
             first_name: firstName.trim(),
             last_name: lastName.trim(),
             mobile_number: fullPhoneNumber,
-            home_postcode: postcode.toUpperCase(),
+            postcode: postcode.toUpperCase(), // <-- THIS IS THE FIX
             vehicle_details: carModel,
             registration_number: carReg.toUpperCase().replace(/\s/g, ''),
           }]);
