@@ -398,12 +398,7 @@ export default function SearchPage() {
       <main className="mx-auto max-w-md px-4 pb-6 w-full flex-1 space-y-6">
         
         <div className="pt-2">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600 shadow-sm">
-              <Car className="h-4 w-4 text-white" />
-            </div>
-            <span className="text-xl font-black tracking-tight text-emerald-900">ShiftPool</span>
-          </div>
+          
           <h1 className="text-3xl font-black tracking-tight text-gray-900 leading-none">
             Find your ride
           </h1>
