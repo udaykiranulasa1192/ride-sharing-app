@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { Car, LogOut, UserCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
 export default function Navbar() {
   const router = useRouter();
+  const pathname = usePathname(); // 1. Added the pathname hook
   const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
@@ -23,6 +24,11 @@ export default function Navbar() {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // 2. THE KILL SWITCH: If the URL starts with /driver, hide this entire navbar
+  if (pathname?.startsWith('/driver')) {
+    return null; 
+  }
 
   const handleAuthAction = async () => {
     if (user) {

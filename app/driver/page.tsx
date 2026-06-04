@@ -25,6 +25,7 @@ import { supabase } from "@/lib/supabase";
 import DriverNav from "@/components/DriverNav";
 import DriverAuthForm from "@/components/DriverAuthForm";
 
+
 const predefinedShifts = [
   "6AM - 2PM",
   "8AM - 4PM",

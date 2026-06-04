@@ -1,17 +1,21 @@
-import Navbar from "@/components/Navbar";
+import DriverTopNav from "@/components/DriverTopNav";
+import DriverNav from "@/components/DriverNav"; // <-- 1. Import the bottom nav
 
-export default function DriverLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function DriverLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Navbar will show on all driver pages */}
-      <Navbar />
+    <section className="relative min-h-screen pb-20"> {/* Added pb-20 so content doesn't hide behind the bottom nav */}
       
-      {/* This is where your driver pages will render */}
-      {children}
-    </div>
+      {/* The Top Bun (Never Reloads) */}
+      <DriverTopNav />
+      
+      {/* The Meat (This is the only part that changes when you click a tab) */}
+      <div className="pt-16">
+        {children}
+      </div>
+
+      {/* The Bottom Bun (Never Reloads) */}
+      <DriverNav /> 
+
+    </section>
   );
 }

@@ -11,7 +11,7 @@ export default function DriverNav() {
   const navItems = [
     { name: "Dashboard", href: "/driver/dashboard", icon: LayoutDashboard },
     { name: "Find Jobs", href: "/driver/jobs", icon: Map },
-    { name: "Post Ride", href: "/driver", icon: PlusCircle },
+    { name: "Post Ride", href: "/driver", icon: PlusCircle }, // <-- UPDATE THIS TO YOUR ACTUAL POST PAGE LATER!
     { name: "Profile", href: "/driver/profile", icon: User },
   ];
 
@@ -28,10 +28,10 @@ export default function DriverNav() {
               key={item.name} 
               href={item.href}
               className={`flex flex-col items-center gap-1 transition-all active:scale-95 ${
-                isActive ? 'text-emerald-600' : 'text-gray-400 hover:text-emerald-600/70'
+                isActive ? 'text-gray-900' : 'text-gray-400 hover:text-gray-600'
               }`}
             >
-              <div className={`p-1.5 rounded-xl ${isActive ? 'bg-emerald-50' : 'bg-transparent'}`}>
+              <div className={`p-1.5 rounded-xl transition-colors ${isActive ? 'bg-gray-100' : 'bg-transparent'}`}>
                 <Icon className={`h-6 w-6 ${isActive ? 'stroke-[2.5px]' : 'stroke-2'}`} />
               </div>
               <span className={`text-[10px] ${isActive ? 'font-black' : 'font-bold'}`}>
