@@ -13,6 +13,11 @@ export default function DriverTopNav() {
 
   // THE BRAIN: Listen to Supabase to see if the driver is logged in
   useEffect(() => {
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('shiftpool_portal', 'driver');
+    }
+    
     const checkUser = async () => {
       const { data } = await supabase.auth.getUser();
       setUser(data.user);

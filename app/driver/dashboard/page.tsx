@@ -149,6 +149,11 @@ export default function DriverDashboard() {
     const { data: rideData } = await supabase.from('rides').select('remaining_seats, total_seats_capacity').eq('id', rideId).single();
     
     if (rideData) {
+      if (seatsNeeded > rideData.remaining_seats) {
+        setErrorMessage(`Cannot accept! They need ${seatsNeeded} seats, but you only have ${rideData.remaining_seats} left.`);
+        setProcessingId(null);
+        return;
+      }
       const newSeats = rideData.remaining_seats - seatsNeeded;
       const newStatus = newSeats <= 0 ? 'full' : 'active';
       

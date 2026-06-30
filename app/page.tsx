@@ -1,7 +1,39 @@
+"use client"; // Moved to the very top for Next.js
+
 import Link from "next/link";
 import { Car, Users } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 
 export default function Home() {
+  const router = useRouter();
+
+  // Smart Switch for the Passenger Button
+  const handlePassengerClick = async () => {
+    if (typeof window !== 'undefined') {
+      const lastPortal = localStorage.getItem('shiftpool_portal');
+      
+      // If they were just playing as a driver, nuke the session!
+      if (lastPortal === 'driver') {
+        await supabase.auth.signOut(); 
+      }
+    }
+    router.push('/search');
+  };
+
+  // Smart Switch for the Driver Button
+  const handleDriverClick = async () => {
+    if (typeof window !== 'undefined') {
+      const lastPortal = localStorage.getItem('shiftpool_portal');
+      
+      // If they were just playing as a passenger, nuke the session!
+      if (lastPortal === 'passenger') {
+        await supabase.auth.signOut(); 
+      }
+    }
+    router.push('/driver');
+  };
+
   return (
     <main className="min-h-screen flex flex-col items-center justify-center bg-gray-50 px-4 py-12">
       <div className="w-full max-w-md flex flex-col">
@@ -28,21 +60,21 @@ export default function Home() {
 
         {/* Action Buttons */}
         <div className="w-full flex flex-col gap-4">
-          <Link
-            href="/search"
+          <button
+            onClick={handlePassengerClick}
             className="group w-full flex items-center justify-center gap-3 bg-emerald-600 text-white py-5 px-6 rounded-2xl text-lg font-semibold transition-all duration-200 hover:bg-emerald-700 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 shadow-md shadow-emerald-600/20"
           >
             <Users className="w-5 h-5" />
             Passenger
-          </Link>
+          </button>
 
-          <Link
-  href="/driver" // <-- CHANGED THIS
-  className="group w-full flex items-center justify-center gap-3 bg-white text-gray-800 py-5 px-6 rounded-2xl text-lg font-semibold border-2 border-gray-200 transition-all duration-200 hover:bg-gray-50 hover:border-gray-300 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-gray-200 focus:ring-offset-2"
->
-  <Car className="w-5 h-5 text-emerald-600" />
-  Driver
-</Link>
+          <button
+            onClick={handleDriverClick}
+            className="group w-full flex items-center justify-center gap-3 bg-white text-gray-800 py-5 px-6 rounded-2xl text-lg font-semibold border-2 border-gray-200 transition-all duration-200 hover:bg-gray-50 hover:border-gray-300 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-gray-200 focus:ring-offset-2"
+          >
+            <Car className="w-5 h-5 text-emerald-600" />
+            Driver
+          </button>
         </div>
 
         {/* Trust Indicator */}

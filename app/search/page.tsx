@@ -148,7 +148,6 @@ export default function SearchPage() {
     }
   };
 
-  // 1. THE FIX: Added `| null` to the RefObject to satisfy strict TypeScript rules
   const handleScrollTo = (ref: React.RefObject<HTMLDivElement | null>, index: number) => {
     if (ref.current) ref.current.scrollTo({ top: index * 48, behavior: 'smooth' });
   };
@@ -161,7 +160,6 @@ export default function SearchPage() {
       if (user) {
         setCurrentUserId(user.id);
         
-        // 2. THE FIX: We are now pulling `work_location` from the database
         const { data: profile } = await supabase
           .from('passenger_profiles')
           .select('postcode, home_latitude, home_longitude, work_location')
@@ -174,28 +172,28 @@ export default function SearchPage() {
             setFromLat(profile.home_latitude);
             setFromLng(profile.home_longitude);
           }
-          // Automatically set the "Going To" destination to their saved work location!
           if (profile.work_location) {
             setTo(profile.work_location);
           }
         }
 
-        const { data: openReqs } = await supabase
+        // --- NEW OPTIMIZED DATABASE FETCH ---
+        const { data: myActiveReqs } = await supabase
           .from('open_requests')
           .select(`
             *,
-            pool_passengers (
+            pool_passengers!inner (
               id, passenger_id, pickup_postcode, seats, price
             )
           `)
-          .eq('status', 'open');
+          .eq('status', 'open')
+          .eq('pool_passengers.passenger_id', user.id);
         
-        if (openReqs && openReqs.length > 0) {
-          const myActiveReqs = openReqs.filter(req => 
-            req.pool_passengers && req.pool_passengers.some((p: any) => p.passenger_id === user.id)
-          );
+        if (myActiveReqs && myActiveReqs.length > 0) {
           setRawRequests(myActiveReqs);
         }
+        // --- END OPTIMIZED FETCH ---
+
       }
       setInitialLoad(false); 
     }

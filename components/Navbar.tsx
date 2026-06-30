@@ -12,6 +12,10 @@ export default function Navbar() {
   const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('shiftpool_portal', 'passenger');
+    }
+    
     // Listen for auth changes to update the button instantly
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
