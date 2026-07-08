@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { Loader2, Calendar, MapPin, Briefcase, Clock, X, ChevronRight, RefreshCw, CalendarDays } from "lucide-react";
 import PassengerBottomNav from "@/components/PassengerBottomNav";
+import WorkplaceAutocomplete from "@/components/WorkplaceAutocomplete"; // <-- ADD THIS
 
 const DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const HOURS = Array.from({ length: 12 }, (_, i) => (i + 1).toString().padStart(2, '0'));
@@ -165,23 +166,29 @@ export default function ShiftSetupPage() {
               </div>
             </div>
           ) : (
-            <div className="space-y-4 animate-in fade-in bg-white p-4 rounded-2xl border border-gray-200">
-              <label className="block text-[11px] font-black text-gray-500 uppercase tracking-widest mb-1">Shift Pattern</label>
-              <div className="flex gap-4">
-                <div className="flex-1">
-                  <span className="text-xs font-bold text-gray-500">Days On</span>
-                  <input type="number" min="1" value={rollingOn} onChange={(e) => setRollingOn(e.target.value)} className="w-full mt-1 rounded-xl border border-gray-300 bg-gray-50 py-3 px-4 text-gray-900 font-bold focus:border-emerald-500 outline-none" />
-                </div>
-                <div className="flex-1">
-                  <span className="text-xs font-bold text-gray-500">Days Off</span>
-                  <input type="number" min="1" value={rollingOff} onChange={(e) => setRollingOff(e.target.value)} className="w-full mt-1 rounded-xl border border-gray-300 bg-gray-50 py-3 px-4 text-gray-900 font-bold focus:border-emerald-500 outline-none" />
+            <div className="space-y-4 pt-4 border-t border-gray-200">
+            <div className="bg-white border border-gray-300 rounded-xl p-3 flex justify-between items-center cursor-pointer" onClick={() => setShowTimeModal(true)}>
+              <div className="flex items-center gap-3 pl-1">
+                <Clock className="h-5 w-5 text-gray-400" />
+                <div>
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Shift Time</p>
+                    <p className="font-black text-sm text-gray-900">{formattedShiftTime}</p>
                 </div>
               </div>
-              <div>
-                <span className="text-xs font-bold text-gray-500">When does your next 'Day On' start?</span>
-                <input type="date" value={rollingStart} onChange={(e) => setRollingStart(e.target.value)} className="w-full mt-1 rounded-xl border border-gray-300 bg-gray-50 py-3 px-4 text-gray-900 font-bold focus:border-emerald-500 outline-none" />
-              </div>
+              <span className="text-xs font-bold bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-lg">Edit</span>
             </div>
+
+            {/* --- REPLACED DESTINATION INPUT --- */}
+            <div className="space-y-1.5 relative z-20">
+              <label className="text-[10px] font-black uppercase tracking-widest text-emerald-600 ml-1">Workplace Hub</label>
+              <WorkplaceAutocomplete 
+                value={destination} 
+                onChange={setDestination} 
+                placeholder="Search workplaces (e.g. GXO Bristol)..." 
+                icon="briefcase"
+              />
+            </div>
+          </div>
           )}
 
           <div className="space-y-4 pt-4 border-t border-gray-200">
