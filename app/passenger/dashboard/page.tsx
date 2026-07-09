@@ -150,6 +150,12 @@ export default function PassengerDashboard() {
     }
   };
 
+  // Parses "YYYY-MM-DD" as LOCAL midnight (new Date("YYYY-MM-DD") is UTC and causes off-by-one days)
+  const parseLocalDate = (dateStr: string) => {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  };
+
   // --- CALENDAR LOGIC ---
   const getFormattedDate = (date: Date) => {
     const y = date.getFullYear();
@@ -187,9 +193,9 @@ export default function PassengerDashboard() {
         if (rotaConfig.rota_type === 'fixed') {
           hasShiftRota = rotaConfig.fixed_days.includes(dayName);
         } else if (rotaConfig.rota_type === 'rolling' && rotaConfig.rolling_start_date) {
-          const startDate = new Date(rotaConfig.rolling_start_date);
+          const startDate = parseLocalDate(rotaConfig.rolling_start_date.split('T')[0]);
           const diffTime = dateObj.getTime() - startDate.getTime();
-          const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+          const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
           
           if (diffDays >= 0) {
             const cycleLength = rotaConfig.rolling_on + rotaConfig.rolling_off;
@@ -229,13 +235,13 @@ export default function PassengerDashboard() {
   const checkSelectedDayHasShift = () => {
     if (shiftRota.length === 0) return false;
     const config = shiftRota[0];
-    const dateObj = new Date(selectedCalendarDate);
+    const dateObj = parseLocalDate(selectedCalendarDate);
     const dayName = dateObj.toLocaleDateString('en-GB', { weekday: 'long' });
 
     if (config.rota_type === 'fixed') return config.fixed_days.includes(dayName);
     if (config.rota_type === 'rolling' && config.rolling_start_date) {
-      const startDate = new Date(config.rolling_start_date);
-      const diffDays = Math.floor((dateObj.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+      const startDate = parseLocalDate(config.rolling_start_date.split('T')[0]);
+      const diffDays = Math.round((dateObj.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
       if (diffDays < 0) return false;
       return (diffDays % (config.rolling_on + config.rolling_off)) < config.rolling_on;
     }

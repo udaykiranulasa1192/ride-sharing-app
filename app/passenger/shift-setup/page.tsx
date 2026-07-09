@@ -166,29 +166,26 @@ export default function ShiftSetupPage() {
               </div>
             </div>
           ) : (
-            <div className="space-y-4 pt-4 border-t border-gray-200">
-            <div className="bg-white border border-gray-300 rounded-xl p-3 flex justify-between items-center cursor-pointer" onClick={() => setShowTimeModal(true)}>
-              <div className="flex items-center gap-3 pl-1">
-                <Clock className="h-5 w-5 text-gray-400" />
-                <div>
-                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Shift Time</p>
-                    <p className="font-black text-sm text-gray-900">{formattedShiftTime}</p>
+            <div className="space-y-4 animate-in fade-in">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-gray-500 ml-1">Days On</label>
+                  <input required type="number" min="1" max="14" value={rollingOn} onChange={(e) => setRollingOn(e.target.value)} className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3.5 px-4 text-sm text-gray-900 font-bold focus:border-emerald-500 outline-none" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-gray-500 ml-1">Days Off</label>
+                  <input required type="number" min="1" max="14" value={rollingOff} onChange={(e) => setRollingOff(e.target.value)} className="w-full rounded-xl border border-gray-300 bg-gray-50 py-3.5 px-4 text-sm text-gray-900 font-bold focus:border-emerald-500 outline-none" />
                 </div>
               </div>
-              <span className="text-xs font-bold bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-lg">Edit</span>
-            </div>
 
-            {/* --- REPLACED DESTINATION INPUT --- */}
-            <div className="space-y-1.5 relative z-20">
-              <label className="text-[10px] font-black uppercase tracking-widest text-emerald-600 ml-1">Workplace Hub</label>
-              <WorkplaceAutocomplete 
-                value={destination} 
-                onChange={setDestination} 
-                placeholder="Search workplaces (e.g. GXO Bristol)..." 
-                icon="briefcase"
-              />
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase tracking-widest text-gray-500 ml-1">Shift Start Date</label>
+                <div className="relative">
+                  <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400 pointer-events-none" />
+                  <input required type="date" value={rollingStart} onChange={(e) => setRollingStart(e.target.value)} className={inputClassName} />
+                </div>
+              </div>
             </div>
-          </div>
           )}
 
           <div className="space-y-4 pt-4 border-t border-gray-200">
@@ -203,9 +200,14 @@ export default function ShiftSetupPage() {
               <span className="text-xs font-bold bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-lg">Edit</span>
             </div>
 
-            <div className="relative">
-              <Briefcase className="absolute left-3.5 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-              <input required type="text" placeholder="Workplace Hub (e.g. GXO Bristol)" value={destination} onChange={(e) => setDestination(e.target.value)} className={inputClassName} />
+            <div className="space-y-1.5 relative z-20">
+              <label className="text-[10px] font-black uppercase tracking-widest text-emerald-600 ml-1">Workplace Hub</label>
+              <WorkplaceAutocomplete 
+                value={destination} 
+                onChange={setDestination} 
+                placeholder="Search workplaces (e.g. GXO Bristol)..." 
+                icon="briefcase"
+              />
             </div>
           </div>
 
